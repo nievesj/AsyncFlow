@@ -1,6 +1,9 @@
 # Visual Studio 2015 user specific files
 .vs/
 
+# Rider
+.idea/
+
 # Compiled Object files
 *.slo
 *.lo
@@ -73,3 +76,4 @@ Plugins/**/Intermediate/*
 
 # Cache files for the editor to use
 DerivedDataCache/*
+Deity.uproject.DotSettings.user
