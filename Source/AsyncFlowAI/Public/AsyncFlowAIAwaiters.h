@@ -3,6 +3,7 @@
 
 #include "AsyncFlowTask.h"
 #include "AIController.h"
+#include "GameFramework/Controller.h"
 #include "Navigation/PathFollowingComponent.h"
 #include "NavigationSystem.h"
 #include "NavFilters/NavigationQueryFilter.h"
@@ -29,7 +30,14 @@ struct FAIMoveToAwaiter
 	FDelegateHandle PathDelegateHandle;
 	TWeakObjectPtr<UPathFollowingComponent> WeakPathComp;
 
-	~FAIMoveToAwaiter() { *AliveFlag = false; }
+	~FAIMoveToAwaiter()
+	{
+		*AliveFlag = false;
+		if (WeakPathComp.IsValid() && PathDelegateHandle.IsValid())
+		{
+			WeakPathComp->OnRequestFinished.Remove(PathDelegateHandle);
+		}
+	}
 
 	bool await_ready() const { return false; }
 
@@ -47,11 +55,11 @@ struct FAIMoveToAwaiter
 		EPathFollowingRequestResult::Type MoveResult;
 		if (bMoveToActor && GoalActor)
 		{
-			MoveResult = Controller->MoveToActor(GoalActor, AcceptanceRadius, true, true, false, true);
+			MoveResult = Controller->MoveToActor(GoalActor, AcceptanceRadius, true, true, true);
 		}
 		else
 		{
-			MoveResult = Controller->MoveToLocation(GoalLocation, AcceptanceRadius, true, true, false, true);
+			MoveResult = Controller->MoveToLocation(GoalLocation, AcceptanceRadius, true, true, true);
 		}
 
 		if (MoveResult == EPathFollowingRequestResult::AlreadyAtGoal)
@@ -179,6 +187,96 @@ struct FFindPathAsyncAwaiter
 [[nodiscard]] inline FFindPathAsyncAwaiter FindPathAsync(UObject* WorldContext, const FPathFindingQuery& Query)
 {
 	return FFindPathAsyncAwaiter{WorldContext, Query};
+}
+
+// ============================================================================
+// SimpleMoveTo — fire-and-forget move via UNavigationSystemV1
+// ============================================================================
+
+struct FSimpleMoveToAwaiter
+{
+	AController* Controller = nullptr;
+	FVector GoalLocation;
+	AActor* GoalActor = nullptr;
+	bool bMoveToActor = false;
+	std::coroutine_handle<> Continuation;
+	TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
+	FDelegateHandle PathDelegateHandle;
+	TWeakObjectPtr<UPathFollowingComponent> WeakPathComp;
+
+	~FSimpleMoveToAwaiter()
+	{
+		*AliveFlag = false;
+		if (WeakPathComp.IsValid() && PathDelegateHandle.IsValid())
+		{
+			WeakPathComp->OnRequestFinished.Remove(PathDelegateHandle);
+		}
+	}
+
+	bool await_ready() const { return false; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		Continuation = Handle;
+
+		if (!Controller)
+		{
+			Handle.resume();
+			return;
+		}
+
+		if (bMoveToActor && GoalActor)
+		{
+			UNavigationSystemV1::SimpleMoveToActor(Controller, GoalActor);
+		}
+		else
+		{
+			UNavigationSystemV1::SimpleMoveToLocation(Controller, GoalLocation);
+		}
+
+		// Listen for move completion via PathFollowingComponent, filtered by request ID
+		UPathFollowingComponent* PathComp = Controller->FindComponentByClass<UPathFollowingComponent>();
+		if (PathComp)
+		{
+			WeakPathComp = PathComp;
+			const FAIRequestID CurrentRequestID = PathComp->GetCurrentRequestId();
+			TWeakPtr<bool> WeakAlive = AliveFlag;
+
+			PathDelegateHandle = PathComp->OnRequestFinished.AddLambda(
+				[this, CurrentRequestID, WeakAlive](FAIRequestID InRequestID, const FPathFollowingResult&)
+				{
+					if (!WeakAlive.IsValid()) { return; }
+					if (InRequestID != CurrentRequestID) { return; }
+					if (WeakPathComp.IsValid())
+					{
+						WeakPathComp->OnRequestFinished.Remove(PathDelegateHandle);
+					}
+					if (Continuation && !Continuation.done())
+					{
+						Continuation.resume();
+					}
+				}
+			);
+		}
+		else
+		{
+			Handle.resume();
+		}
+	}
+
+	void await_resume() const {}
+};
+
+/** Simple move to a location. No result — fire and forget with completion. */
+[[nodiscard]] inline FSimpleMoveToAwaiter SimpleMoveTo(AController* Controller, const FVector& GoalLocation)
+{
+	return FSimpleMoveToAwaiter{Controller, GoalLocation, nullptr, false};
+}
+
+/** Simple move to an actor. */
+[[nodiscard]] inline FSimpleMoveToAwaiter SimpleMoveTo(AController* Controller, AActor* GoalActor)
+{
+	return FSimpleMoveToAwaiter{Controller, FVector::ZeroVector, GoalActor, true};
 }
 
 } // namespace AsyncFlow

@@ -10,6 +10,7 @@
 #pragma once
 
 #include "AsyncFlowTask.h"
+#include "AsyncFlowAwaiters.h"
 #include "Async/Async.h"
 #include "Async/ParallelFor.h"
 #include "Templates/Function.h"
@@ -510,8 +511,212 @@ template <typename T>
 
 #endif // ASYNCFLOW_HAS_UE_TASKS
 
-} // namespace AsyncFlow
+// ============================================================================
+// Thread-migration awaiters — move the coroutine body between threads
+// ============================================================================
 
+/**
+ * Resume the coroutine on the game thread. Use after MoveToThread/MoveToTask
+ * to safely access UObjects again.
+ */
+struct FMoveToGameThreadAwaiter
+{
+	Private::FAwaiterAliveFlag AliveFlag;
+
+	bool await_ready() const { return IsInGameThread(); }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		TSharedPtr<bool> Alive = AliveFlag.Get();
+		AsyncTask(ENamedThreads::GameThread, [Handle, Alive]()
+		{
+			if (*Alive)
+			{
+				Handle.resume();
+			}
+		});
+	}
+
+	void await_resume() const {}
+};
+
+[[nodiscard]] inline FMoveToGameThreadAwaiter MoveToGameThread()
+{
+	return FMoveToGameThreadAwaiter{};
+}
+
+/**
+ * Resume the coroutine on a named UE thread (e.g., ENamedThreads::AnyBackgroundThreadNormalTask).
+ *
+ * WARNING: UObject access is FORBIDDEN on non-game threads.
+ */
+struct FMoveToThreadAwaiter
+{
+	ENamedThreads::Type TargetThread;
+	Private::FAwaiterAliveFlag AliveFlag;
+
+	bool await_ready() const { return false; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		TSharedPtr<bool> Alive = AliveFlag.Get();
+		AsyncTask(TargetThread, [Handle, Alive]()
+		{
+			if (*Alive)
+			{
+				Handle.resume();
+			}
+		});
+	}
+
+	void await_resume() const {}
+};
+
+[[nodiscard]] inline FMoveToThreadAwaiter MoveToThread(ENamedThreads::Type Thread)
+{
+	return FMoveToThreadAwaiter{Thread};
+}
+
+/**
+ * Resume the coroutine on a UE::Tasks worker thread.
+ * Efficient for sustained background computation.
+ *
+ * WARNING: UObject access is FORBIDDEN on task threads.
+ */
+struct FMoveToTaskAwaiter
+{
+	Private::FAwaiterAliveFlag AliveFlag;
+
+	bool await_ready() const { return false; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		TSharedPtr<bool> Alive = AliveFlag.Get();
+		Async(EAsyncExecution::ThreadPool, [Handle, Alive]()
+		{
+			if (*Alive)
+			{
+				Handle.resume();
+			}
+		});
+	}
+
+	void await_resume() const {}
+};
+
+[[nodiscard]] inline FMoveToTaskAwaiter MoveToTask()
+{
+	return FMoveToTaskAwaiter{};
+}
+
+/**
+ * Resume the coroutine on a brand-new dedicated thread.
+ * Suitable for blocking I/O or long-running operations.
+ *
+ * WARNING: UObject access is FORBIDDEN on the new thread.
+ */
+struct FMoveToNewThreadAwaiter
+{
+	Private::FAwaiterAliveFlag AliveFlag;
+
+	bool await_ready() const { return false; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		TSharedPtr<bool> Alive = AliveFlag.Get();
+		Async(EAsyncExecution::Thread, [Handle, Alive]()
+		{
+			if (*Alive)
+			{
+				Handle.resume();
+			}
+		});
+	}
+
+	void await_resume() const {}
+};
+
+[[nodiscard]] inline FMoveToNewThreadAwaiter MoveToNewThread()
+{
+	return FMoveToNewThreadAwaiter{};
+}
+
+// ============================================================================
+// Yield — suspend and resume on the game thread next opportunity
+// ============================================================================
+
+/**
+ * Yield the coroutine to the game thread scheduler. Does not require a world context.
+ * If already on the game thread, schedules resumption via AsyncTask.
+ */
+struct FYieldAwaiter
+{
+	Private::FAwaiterAliveFlag AliveFlag;
+
+	bool await_ready() const { return false; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		TSharedPtr<bool> Alive = AliveFlag.Get();
+		AsyncTask(ENamedThreads::GameThread, [Handle, Alive]()
+		{
+			if (*Alive)
+			{
+				Handle.resume();
+			}
+		});
+	}
+
+	void await_resume() const {}
+};
+
+[[nodiscard]] inline FYieldAwaiter Yield()
+{
+	return FYieldAwaiter{};
+}
+
+// ============================================================================
+// PlatformSeconds — free-threaded delay using FPlatformProcess::Sleep
+// ============================================================================
+
+/**
+ * Sleep for the specified duration on a worker thread, then resume on the game thread.
+ * Does not require a world context or tick subsystem.
+ */
+struct FPlatformSecondsAwaiter
+{
+	double Seconds;
+	Private::FAwaiterAliveFlag AliveFlag;
+
+	bool await_ready() const { return Seconds <= 0.0; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		const double SleepDuration = Seconds;
+		TSharedPtr<bool> Alive = AliveFlag.Get();
+		Async(EAsyncExecution::ThreadPool, [Handle, SleepDuration, Alive]()
+		{
+			FPlatformProcess::Sleep(static_cast<float>(SleepDuration));
+			AsyncTask(ENamedThreads::GameThread, [Handle, Alive]()
+			{
+				if (*Alive)
+				{
+					Handle.resume();
+				}
+			});
+		});
+	}
+
+	void await_resume() const {}
+};
+
+/** Free-threaded delay. Sleeps on a worker, resumes on the game thread. No world context required. */
+[[nodiscard]] inline FPlatformSecondsAwaiter PlatformSeconds(double InSeconds)
+{
+	return FPlatformSecondsAwaiter{InSeconds};
+}
+
+} // namespace AsyncFlow
 
 
 

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "AsyncFlowTask.h"
+#include "AsyncFlowAwaiters.h"
 #include "Engine/StreamableManager.h"
 #include "Engine/AssetManager.h"
 #include "UObject/SoftObjectPtr.h"
@@ -21,6 +22,7 @@ struct TAsyncLoadObjectAwaiter
 	TSoftObjectPtr<T> SoftPtr;
 	T* LoadedObject = nullptr;
 	std::coroutine_handle<> Continuation;
+	Private::FAwaiterAliveFlag AliveFlag;
 
 	bool await_ready() const
 	{
@@ -33,13 +35,11 @@ struct TAsyncLoadObjectAwaiter
 
 		if (SoftPtr.IsNull())
 		{
-			// Nothing to load
 			LoadedObject = nullptr;
 			Handle.resume();
 			return;
 		}
 
-		// Already loaded (resolved)
 		if (SoftPtr.IsValid())
 		{
 			LoadedObject = SoftPtr.Get();
@@ -50,10 +50,12 @@ struct TAsyncLoadObjectAwaiter
 		FStreamableManager& StreamableManager = UAssetManager::GetStreamableManager();
 		const FSoftObjectPath Path = SoftPtr.ToSoftObjectPath();
 
+		TSharedPtr<bool> Alive = AliveFlag.Get();
 		StreamableManager.RequestAsyncLoad(
 			Path,
-			FStreamableDelegate::CreateLambda([this]()
+			FStreamableDelegate::CreateLambda([this, Alive]()
 			{
+				if (!*Alive) { return; }
 				LoadedObject = SoftPtr.Get();
 				if (Continuation)
 				{
@@ -71,7 +73,7 @@ struct TAsyncLoadObjectAwaiter
 
 /** Asynchronously load a soft object pointer. Returns the hard pointer when loaded. */
 template <typename T>
-TAsyncLoadObjectAwaiter<T> AsyncLoadObject(TSoftObjectPtr<T> SoftPtr)
+[[nodiscard]] TAsyncLoadObjectAwaiter<T> AsyncLoadObject(TSoftObjectPtr<T> SoftPtr)
 {
 	return TAsyncLoadObjectAwaiter<T>{MoveTemp(SoftPtr)};
 }
@@ -86,6 +88,7 @@ struct TAsyncLoadClassAwaiter
 	TSoftClassPtr<T> SoftClassPtr;
 	UClass* LoadedClass = nullptr;
 	std::coroutine_handle<> Continuation;
+	Private::FAwaiterAliveFlag AliveFlag;
 
 	bool await_ready() const
 	{
@@ -106,10 +109,12 @@ struct TAsyncLoadClassAwaiter
 		FStreamableManager& StreamableManager = UAssetManager::GetStreamableManager();
 		const FSoftObjectPath Path = SoftClassPtr.ToSoftObjectPath();
 
+		TSharedPtr<bool> Alive = AliveFlag.Get();
 		StreamableManager.RequestAsyncLoad(
 			Path,
-			FStreamableDelegate::CreateLambda([this]()
+			FStreamableDelegate::CreateLambda([this, Alive]()
 			{
+				if (!*Alive) { return; }
 				LoadedClass = SoftClassPtr.Get();
 				if (Continuation)
 				{
@@ -127,7 +132,7 @@ struct TAsyncLoadClassAwaiter
 
 /** Asynchronously load a soft class pointer. Returns UClass* when loaded. */
 template <typename T>
-TAsyncLoadClassAwaiter<T> AsyncLoadClass(TSoftClassPtr<T> SoftClassPtr)
+[[nodiscard]] TAsyncLoadClassAwaiter<T> AsyncLoadClass(TSoftClassPtr<T> SoftClassPtr)
 {
 	return TAsyncLoadClassAwaiter<T>{MoveTemp(SoftClassPtr)};
 }
@@ -143,6 +148,8 @@ struct FAsyncLoadPrimaryAssetAwaiter
 	UObject* LoadedObject = nullptr;
 	std::coroutine_handle<> Continuation;
 	TSharedPtr<FStreamableHandle> StreamableHandle;
+	bool bCallbackFired = false;
+	Private::FAwaiterAliveFlag AliveFlag;
 
 	bool await_ready() const { return false; }
 
@@ -157,11 +164,14 @@ struct FAsyncLoadPrimaryAssetAwaiter
 			return;
 		}
 
+		TSharedPtr<bool> Alive = AliveFlag.Get();
 		StreamableHandle = AssetManager->LoadPrimaryAsset(
 			AssetId,
 			Bundles,
-			FStreamableDelegate::CreateLambda([this]()
+			FStreamableDelegate::CreateLambda([this, Alive]()
 			{
+				if (!*Alive) { return; }
+				bCallbackFired = true;
 				UAssetManager* AM = UAssetManager::GetIfInitialized();
 				if (AM)
 				{
@@ -174,8 +184,8 @@ struct FAsyncLoadPrimaryAssetAwaiter
 			})
 		);
 
-		// If handle completed synchronously
-		if (StreamableHandle.IsValid() && StreamableHandle->HasLoadCompleted())
+		// If the callback already fired synchronously during LoadPrimaryAsset, skip the post-check
+		if (!bCallbackFired && StreamableHandle.IsValid() && StreamableHandle->HasLoadCompleted())
 		{
 			UAssetManager* AM = UAssetManager::GetIfInitialized();
 			if (AM)
@@ -195,6 +205,244 @@ struct FAsyncLoadPrimaryAssetAwaiter
 inline FAsyncLoadPrimaryAssetAwaiter AsyncLoadPrimaryAsset(FPrimaryAssetId AssetId, TArray<FName> Bundles = {})
 {
 	return FAsyncLoadPrimaryAssetAwaiter{MoveTemp(AssetId), MoveTemp(Bundles)};
+}
+
+// ============================================================================
+// AsyncLoadObjects — batch load multiple soft object pointers
+// ============================================================================
+
+template <typename T>
+struct TAsyncLoadObjectsAwaiter
+{
+	TArray<TSoftObjectPtr<T>> SoftPtrs;
+	TArray<T*> Results;
+	std::coroutine_handle<> Continuation;
+	TSharedPtr<FStreamableHandle> StreamableHandle;
+	Private::FAwaiterAliveFlag AliveFlag;
+
+	bool await_ready() const { return SoftPtrs.Num() == 0; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		Continuation = Handle;
+
+		TArray<FSoftObjectPath> Paths;
+		Paths.Reserve(SoftPtrs.Num());
+		for (const TSoftObjectPtr<T>& Ptr : SoftPtrs)
+		{
+			if (!Ptr.IsNull())
+			{
+				Paths.Add(Ptr.ToSoftObjectPath());
+			}
+		}
+
+		if (Paths.Num() == 0)
+		{
+			Handle.resume();
+			return;
+		}
+
+		FStreamableManager& StreamableManager = UAssetManager::GetStreamableManager();
+		TSharedPtr<bool> Alive = AliveFlag.Get();
+		StreamableHandle = StreamableManager.RequestAsyncLoad(
+			Paths,
+			FStreamableDelegate::CreateLambda([this, Alive]()
+			{
+				if (!*Alive) { return; }
+				Results.Reserve(SoftPtrs.Num());
+				for (const TSoftObjectPtr<T>& Ptr : SoftPtrs)
+				{
+					Results.Add(Ptr.Get());
+				}
+				if (Continuation)
+				{
+					Continuation.resume();
+				}
+			})
+		);
+	}
+
+	TArray<T*> await_resume()
+	{
+		return MoveTemp(Results);
+	}
+};
+
+/** Asynchronously load multiple soft object pointers in a batch. */
+template <typename T>
+[[nodiscard]] TAsyncLoadObjectsAwaiter<T> AsyncLoadObjects(TArray<TSoftObjectPtr<T>> SoftPtrs)
+{
+	return TAsyncLoadObjectsAwaiter<T>{MoveTemp(SoftPtrs)};
+}
+
+// ============================================================================
+// AsyncLoadClasses — batch load multiple soft class pointers
+// ============================================================================
+
+template <typename T>
+struct TAsyncLoadClassesAwaiter
+{
+	TArray<TSoftClassPtr<T>> SoftClassPtrs;
+	TArray<UClass*> Results;
+	std::coroutine_handle<> Continuation;
+	TSharedPtr<FStreamableHandle> StreamableHandle;
+	Private::FAwaiterAliveFlag AliveFlag;
+
+	bool await_ready() const { return SoftClassPtrs.Num() == 0; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		Continuation = Handle;
+
+		TArray<FSoftObjectPath> Paths;
+		Paths.Reserve(SoftClassPtrs.Num());
+		for (const TSoftClassPtr<T>& Ptr : SoftClassPtrs)
+		{
+			if (!Ptr.IsNull())
+			{
+				Paths.Add(Ptr.ToSoftObjectPath());
+			}
+		}
+
+		if (Paths.Num() == 0)
+		{
+			Handle.resume();
+			return;
+		}
+
+		FStreamableManager& StreamableManager = UAssetManager::GetStreamableManager();
+		TSharedPtr<bool> Alive = AliveFlag.Get();
+		StreamableHandle = StreamableManager.RequestAsyncLoad(
+			Paths,
+			FStreamableDelegate::CreateLambda([this, Alive]()
+			{
+				if (!*Alive) { return; }
+				Results.Reserve(SoftClassPtrs.Num());
+				for (const TSoftClassPtr<T>& Ptr : SoftClassPtrs)
+				{
+					Results.Add(Ptr.Get());
+				}
+				if (Continuation)
+				{
+					Continuation.resume();
+				}
+			})
+		);
+	}
+
+	TArray<UClass*> await_resume()
+	{
+		return MoveTemp(Results);
+	}
+};
+
+/** Asynchronously load multiple soft class pointers in a batch. */
+template <typename T>
+[[nodiscard]] TAsyncLoadClassesAwaiter<T> AsyncLoadClasses(TArray<TSoftClassPtr<T>> SoftClassPtrs)
+{
+	return TAsyncLoadClassesAwaiter<T>{MoveTemp(SoftClassPtrs)};
+}
+
+// ============================================================================
+// AsyncLoadPrimaryAssets — batch load by FPrimaryAssetId array
+// ============================================================================
+
+struct FAsyncLoadPrimaryAssetsAwaiter
+{
+	TArray<FPrimaryAssetId> AssetIds;
+	TArray<FName> Bundles;
+	TArray<UObject*> Results;
+	std::coroutine_handle<> Continuation;
+	TSharedPtr<FStreamableHandle> StreamableHandle;
+	Private::FAwaiterAliveFlag AliveFlag;
+
+	bool await_ready() const { return AssetIds.Num() == 0; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		Continuation = Handle;
+
+		UAssetManager* AssetManager = UAssetManager::GetIfInitialized();
+		if (!AssetManager)
+		{
+			Handle.resume();
+			return;
+		}
+
+		TSharedPtr<bool> Alive = AliveFlag.Get();
+		StreamableHandle = AssetManager->LoadPrimaryAssets(
+			AssetIds,
+			Bundles,
+			FStreamableDelegate::CreateLambda([this, Alive]()
+			{
+				if (!*Alive) { return; }
+				UAssetManager* AM = UAssetManager::GetIfInitialized();
+				if (AM)
+				{
+					Results.Reserve(AssetIds.Num());
+					for (const FPrimaryAssetId& Id : AssetIds)
+					{
+						Results.Add(AM->GetPrimaryAssetObject(Id));
+					}
+				}
+				if (Continuation)
+				{
+					Continuation.resume();
+				}
+			})
+		);
+	}
+
+	TArray<UObject*> await_resume()
+	{
+		return MoveTemp(Results);
+	}
+};
+
+/** Asynchronously load multiple primary assets. */
+[[nodiscard]] inline FAsyncLoadPrimaryAssetsAwaiter AsyncLoadPrimaryAssets(TArray<FPrimaryAssetId> AssetIds, TArray<FName> Bundles = {})
+{
+	return FAsyncLoadPrimaryAssetsAwaiter{MoveTemp(AssetIds), MoveTemp(Bundles)};
+}
+
+// ============================================================================
+// AsyncLoadPackage — load a package asynchronously
+// ============================================================================
+
+struct FAsyncLoadPackageAwaiter
+{
+	FString PackagePath;
+	UPackage* LoadedPackage = nullptr;
+	std::coroutine_handle<> Continuation;
+	Private::FAwaiterAliveFlag AliveFlag;
+
+	bool await_ready() const { return false; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		Continuation = Handle;
+
+		TSharedPtr<bool> Alive = AliveFlag.Get();
+		LoadPackageAsync(PackagePath,
+			FLoadPackageAsyncDelegate::CreateLambda([this, Alive](const FName&, UPackage* Package, EAsyncLoadingResult::Type)
+			{
+				if (!*Alive) { return; }
+				LoadedPackage = Package;
+				if (Continuation && !Continuation.done())
+				{
+					Continuation.resume();
+				}
+			})
+		);
+	}
+
+	UPackage* await_resume() const { return LoadedPackage; }
+};
+
+/** Asynchronously load a package by path. Returns UPackage* when loaded. */
+[[nodiscard]] inline FAsyncLoadPackageAwaiter AsyncLoadPackage(const FString& PackagePath)
+{
+	return FAsyncLoadPackageAwaiter{PackagePath};
 }
 
 } // namespace AsyncFlow

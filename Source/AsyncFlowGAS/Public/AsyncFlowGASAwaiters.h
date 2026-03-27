@@ -17,14 +17,21 @@ namespace AsyncFlow
 
 struct FWaitGameplayEventAwaiter
 {
-	UAbilitySystemComponent* ASC = nullptr;
+	TWeakObjectPtr<UAbilitySystemComponent> ASC;
 	FGameplayTag EventTag;
 	FGameplayEventData ResultData;
 	std::coroutine_handle<> Continuation;
 	FDelegateHandle DelegateHandle;
 	TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
 
-	~FWaitGameplayEventAwaiter() { *AliveFlag = false; }
+	~FWaitGameplayEventAwaiter()
+	{
+		*AliveFlag = false;
+		if (ASC.IsValid() && DelegateHandle.IsValid())
+		{
+			ASC->GenericGameplayEventCallbacks.FindOrAdd(EventTag).Remove(DelegateHandle);
+		}
+	}
 
 	bool await_ready() const { return false; }
 
@@ -32,7 +39,7 @@ struct FWaitGameplayEventAwaiter
 	{
 		Continuation = Handle;
 
-		if (!ASC)
+		if (!ASC.IsValid())
 		{
 			Handle.resume();
 			return;
@@ -47,7 +54,7 @@ struct FWaitGameplayEventAwaiter
 				{
 					ResultData = *Payload;
 				}
-				if (ASC)
+				if (ASC.IsValid())
 				{
 					ASC->GenericGameplayEventCallbacks.FindOrAdd(EventTag).Remove(DelegateHandle);
 				}
@@ -63,9 +70,9 @@ struct FWaitGameplayEventAwaiter
 };
 
 /** Wait for a gameplay event with the specified tag. Returns the event data. */
-[[nodiscard]] inline FWaitGameplayEventAwaiter WaitGameplayEvent(UAbilitySystemComponent* ASC, FGameplayTag EventTag)
+[[nodiscard]] inline FWaitGameplayEventAwaiter WaitGameplayEvent(UAbilitySystemComponent* InASC, FGameplayTag EventTag)
 {
-	return FWaitGameplayEventAwaiter{ASC, EventTag};
+	return FWaitGameplayEventAwaiter{InASC, EventTag};
 }
 
 // ============================================================================
@@ -74,24 +81,31 @@ struct FWaitGameplayEventAwaiter
 
 struct FWaitGameplayTagAddedAwaiter
 {
-	UAbilitySystemComponent* ASC = nullptr;
+	TWeakObjectPtr<UAbilitySystemComponent> ASC;
 	FGameplayTag Tag;
 	std::coroutine_handle<> Continuation;
 	FDelegateHandle DelegateHandle;
 	TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
 
-	~FWaitGameplayTagAddedAwaiter() { *AliveFlag = false; }
+	~FWaitGameplayTagAddedAwaiter()
+	{
+		*AliveFlag = false;
+		if (ASC.IsValid() && DelegateHandle.IsValid())
+		{
+			ASC->RegisterGameplayTagEvent(Tag, EGameplayTagEventType::NewOrRemoved).Remove(DelegateHandle);
+		}
+	}
 
 	bool await_ready() const
 	{
-		return ASC && ASC->HasMatchingGameplayTag(Tag);
+		return ASC.IsValid() && ASC->HasMatchingGameplayTag(Tag);
 	}
 
 	void await_suspend(std::coroutine_handle<> Handle)
 	{
 		Continuation = Handle;
 
-		if (!ASC)
+		if (!ASC.IsValid())
 		{
 			Handle.resume();
 			return;
@@ -110,7 +124,10 @@ struct FWaitGameplayTagAddedAwaiter
 				if (!WeakAlive.IsValid()) { return; }
 				if (NewCount > 0)
 				{
-					ASC->RegisterGameplayTagEvent(Tag, EGameplayTagEventType::NewOrRemoved).Remove(DelegateHandle);
+					if (ASC.IsValid())
+					{
+						ASC->RegisterGameplayTagEvent(Tag, EGameplayTagEventType::NewOrRemoved).Remove(DelegateHandle);
+					}
 					if (Continuation && !Continuation.done())
 					{
 						Continuation.resume();
@@ -123,9 +140,9 @@ struct FWaitGameplayTagAddedAwaiter
 };
 
 /** Wait until a gameplay tag is added to the ASC. */
-[[nodiscard]] inline FWaitGameplayTagAddedAwaiter WaitGameplayTagAdded(UAbilitySystemComponent* ASC, FGameplayTag Tag)
+[[nodiscard]] inline FWaitGameplayTagAddedAwaiter WaitGameplayTagAdded(UAbilitySystemComponent* InASC, FGameplayTag Tag)
 {
-	return FWaitGameplayTagAddedAwaiter{ASC, Tag};
+	return FWaitGameplayTagAddedAwaiter{InASC, Tag};
 }
 
 // ============================================================================
@@ -134,24 +151,31 @@ struct FWaitGameplayTagAddedAwaiter
 
 struct FWaitGameplayTagRemovedAwaiter
 {
-	UAbilitySystemComponent* ASC = nullptr;
+	TWeakObjectPtr<UAbilitySystemComponent> ASC;
 	FGameplayTag Tag;
 	std::coroutine_handle<> Continuation;
 	FDelegateHandle DelegateHandle;
 	TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
 
-	~FWaitGameplayTagRemovedAwaiter() { *AliveFlag = false; }
+	~FWaitGameplayTagRemovedAwaiter()
+	{
+		*AliveFlag = false;
+		if (ASC.IsValid() && DelegateHandle.IsValid())
+		{
+			ASC->RegisterGameplayTagEvent(Tag, EGameplayTagEventType::NewOrRemoved).Remove(DelegateHandle);
+		}
+	}
 
 	bool await_ready() const
 	{
-		return ASC && !ASC->HasMatchingGameplayTag(Tag);
+		return ASC.IsValid() && !ASC->HasMatchingGameplayTag(Tag);
 	}
 
 	void await_suspend(std::coroutine_handle<> Handle)
 	{
 		Continuation = Handle;
 
-		if (!ASC)
+		if (!ASC.IsValid())
 		{
 			Handle.resume();
 			return;
@@ -170,7 +194,10 @@ struct FWaitGameplayTagRemovedAwaiter
 				if (!WeakAlive.IsValid()) { return; }
 				if (NewCount == 0)
 				{
-					ASC->RegisterGameplayTagEvent(Tag, EGameplayTagEventType::NewOrRemoved).Remove(DelegateHandle);
+					if (ASC.IsValid())
+					{
+						ASC->RegisterGameplayTagEvent(Tag, EGameplayTagEventType::NewOrRemoved).Remove(DelegateHandle);
+					}
 					if (Continuation && !Continuation.done())
 					{
 						Continuation.resume();
@@ -183,9 +210,9 @@ struct FWaitGameplayTagRemovedAwaiter
 };
 
 /** Wait until a gameplay tag is removed from the ASC. */
-[[nodiscard]] inline FWaitGameplayTagRemovedAwaiter WaitGameplayTagRemoved(UAbilitySystemComponent* ASC, FGameplayTag Tag)
+[[nodiscard]] inline FWaitGameplayTagRemovedAwaiter WaitGameplayTagRemoved(UAbilitySystemComponent* InASC, FGameplayTag Tag)
 {
-	return FWaitGameplayTagRemovedAwaiter{ASC, Tag};
+	return FWaitGameplayTagRemovedAwaiter{InASC, Tag};
 }
 
 // ============================================================================
@@ -194,14 +221,21 @@ struct FWaitGameplayTagRemovedAwaiter
 
 struct FWaitAttributeChangeAwaiter
 {
-	UAbilitySystemComponent* ASC = nullptr;
+	TWeakObjectPtr<UAbilitySystemComponent> ASC;
 	FGameplayAttribute Attribute;
 	float NewValue = 0.0f;
 	std::coroutine_handle<> Continuation;
 	FDelegateHandle DelegateHandle;
 	TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
 
-	~FWaitAttributeChangeAwaiter() { *AliveFlag = false; }
+	~FWaitAttributeChangeAwaiter()
+	{
+		*AliveFlag = false;
+		if (ASC.IsValid() && DelegateHandle.IsValid())
+		{
+			ASC->GetGameplayAttributeValueChangeDelegate(Attribute).Remove(DelegateHandle);
+		}
+	}
 
 	bool await_ready() const { return false; }
 
@@ -209,7 +243,7 @@ struct FWaitAttributeChangeAwaiter
 	{
 		Continuation = Handle;
 
-		if (!ASC)
+		if (!ASC.IsValid())
 		{
 			Handle.resume();
 			return;
@@ -221,7 +255,10 @@ struct FWaitAttributeChangeAwaiter
 			{
 				if (!WeakAlive.IsValid()) { return; }
 				NewValue = Data.NewValue;
-				ASC->GetGameplayAttributeValueChangeDelegate(Attribute).Remove(DelegateHandle);
+				if (ASC.IsValid())
+				{
+					ASC->GetGameplayAttributeValueChangeDelegate(Attribute).Remove(DelegateHandle);
+				}
 				if (Continuation && !Continuation.done())
 				{
 					Continuation.resume();
@@ -233,9 +270,9 @@ struct FWaitAttributeChangeAwaiter
 };
 
 /** Wait for an attribute to change. Returns the new value. */
-[[nodiscard]] inline FWaitAttributeChangeAwaiter WaitAttributeChange(UAbilitySystemComponent* ASC, FGameplayAttribute Attribute)
+[[nodiscard]] inline FWaitAttributeChangeAwaiter WaitAttributeChange(UAbilitySystemComponent* InASC, FGameplayAttribute Attribute)
 {
-	return FWaitAttributeChangeAwaiter{ASC, Attribute};
+	return FWaitAttributeChangeAwaiter{InASC, Attribute};
 }
 
 // ============================================================================
@@ -244,13 +281,24 @@ struct FWaitAttributeChangeAwaiter
 
 struct FWaitGameplayEffectRemovedAwaiter
 {
-	UAbilitySystemComponent* ASC = nullptr;
+	TWeakObjectPtr<UAbilitySystemComponent> ASC;
 	FActiveGameplayEffectHandle EffectHandle;
 	std::coroutine_handle<> Continuation;
 	FDelegateHandle DelegateHandle;
 	TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
 
-	~FWaitGameplayEffectRemovedAwaiter() { *AliveFlag = false; }
+	~FWaitGameplayEffectRemovedAwaiter()
+	{
+		*AliveFlag = false;
+		if (ASC.IsValid() && DelegateHandle.IsValid())
+		{
+			FOnActiveGameplayEffectRemoved_Info* Delegate = ASC->OnGameplayEffectRemoved_InfoDelegate(EffectHandle);
+			if (Delegate)
+			{
+				Delegate->Remove(DelegateHandle);
+			}
+		}
+	}
 
 	bool await_ready() const { return false; }
 
@@ -258,7 +306,7 @@ struct FWaitGameplayEffectRemovedAwaiter
 	{
 		Continuation = Handle;
 
-		if (!ASC)
+		if (!ASC.IsValid())
 		{
 			Handle.resume();
 			return;
@@ -288,9 +336,9 @@ struct FWaitGameplayEffectRemovedAwaiter
 };
 
 /** Wait for an active gameplay effect to be removed. */
-[[nodiscard]] inline FWaitGameplayEffectRemovedAwaiter WaitGameplayEffectRemoved(UAbilitySystemComponent* ASC, FActiveGameplayEffectHandle EffectHandle)
+[[nodiscard]] inline FWaitGameplayEffectRemovedAwaiter WaitGameplayEffectRemoved(UAbilitySystemComponent* InASC, FActiveGameplayEffectHandle EffectHandle)
 {
-	return FWaitGameplayEffectRemovedAwaiter{ASC, EffectHandle};
+	return FWaitGameplayEffectRemovedAwaiter{InASC, EffectHandle};
 }
 
 } // namespace AsyncFlow

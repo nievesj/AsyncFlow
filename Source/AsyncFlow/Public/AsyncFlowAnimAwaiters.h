@@ -2,8 +2,10 @@
 #pragma once
 
 #include "AsyncFlowTask.h"
+#include "AsyncFlowTickSubsystem.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
+#include "Engine/World.h"
 
 #include <coroutine>
 
@@ -121,6 +123,138 @@ struct FWaitMontageBlendOutAwaiter
 [[nodiscard]] inline FWaitMontageBlendOutAwaiter WaitForMontageBlendOut(UAnimInstance* AnimInstance, UAnimMontage* Montage)
 {
 	return FWaitMontageBlendOutAwaiter{AnimInstance, Montage};
+}
+
+// ============================================================================
+// NextNotify — waits for a specific anim notify by name during montage playback
+// Uses polling via tick subsystem since OnPlayMontageNotifyBegin is a dynamic delegate.
+// ============================================================================
+
+struct FNextNotifyAwaiter
+{
+	UAnimInstance* AnimInstance = nullptr;
+	UAnimMontage* Montage = nullptr;
+	FName NotifyName;
+	std::coroutine_handle<> Continuation;
+	Private::FAwaiterAliveFlag AliveFlag;
+
+	bool await_ready() const { return false; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		Continuation = Handle;
+
+		if (!AnimInstance || !Montage)
+		{
+			Handle.resume();
+			return;
+		}
+
+		UWorld* World = AnimInstance->GetWorld();
+		if (!World)
+		{
+			Handle.resume();
+			return;
+		}
+
+		UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
+		if (!Subsystem)
+		{
+			Handle.resume();
+			return;
+		}
+
+		// POLLING STUB: waits for montage to stop, does NOT detect the actual notify.
+		// For production use, implement a UObject relay bound to the dynamic delegate.
+		TWeakObjectPtr<UAnimInstance> WeakAnim = AnimInstance;
+		TWeakObjectPtr<UAnimMontage> WeakMontage = Montage;
+
+		Subsystem->ScheduleCondition(Handle, AnimInstance, [WeakAnim, WeakMontage]() -> bool
+		{
+			if (!WeakAnim.IsValid() || !WeakMontage.IsValid())
+			{
+				return true;
+			}
+			if (!WeakAnim->Montage_IsPlaying(WeakMontage.Get()))
+			{
+				return true;
+			}
+			return false;
+		}, AliveFlag.Get());
+	}
+
+	void await_resume() const {}
+};
+
+/**
+ * Wait for a montage to end — proxy for notify waiting.
+ * WARNING: This is a polling stub that waits for montage completion, not the actual notify.
+ * See docs for dynamic delegate relay pattern for true notify detection.
+ */
+[[nodiscard]] inline FNextNotifyAwaiter NextNotify(UAnimInstance* AnimInstance, UAnimMontage* Montage, FName NotifyName)
+{
+	return FNextNotifyAwaiter{AnimInstance, Montage, NotifyName};
+}
+
+// ============================================================================
+// WaitForMontageNotifyEnd — waits until a montage is no longer playing
+// Proxy implementation pending dynamic delegate relay (see docs).
+// ============================================================================
+
+struct FWaitMontageNotifyEndAwaiter
+{
+	UAnimInstance* AnimInstance = nullptr;
+	UAnimMontage* Montage = nullptr;
+	FName NotifyName;
+	std::coroutine_handle<> Continuation;
+	Private::FAwaiterAliveFlag AliveFlag;
+
+	bool await_ready() const { return false; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		Continuation = Handle;
+
+		if (!AnimInstance || !Montage)
+		{
+			Handle.resume();
+			return;
+		}
+
+		UWorld* World = AnimInstance->GetWorld();
+		if (!World)
+		{
+			Handle.resume();
+			return;
+		}
+
+		UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
+		if (!Subsystem)
+		{
+			Handle.resume();
+			return;
+		}
+
+		TWeakObjectPtr<UAnimInstance> WeakAnim = AnimInstance;
+		TWeakObjectPtr<UAnimMontage> WeakMontage = Montage;
+
+		Subsystem->ScheduleCondition(Handle, AnimInstance, [WeakAnim, WeakMontage]() -> bool
+		{
+			if (!WeakAnim.IsValid() || !WeakMontage.IsValid())
+			{
+				return true;
+			}
+			return !WeakAnim->Montage_IsPlaying(WeakMontage.Get());
+		}, AliveFlag.Get());
+	}
+
+	void await_resume() const {}
+};
+
+/** Wait for a montage notify end. Falls back to montage completion polling. */
+[[nodiscard]] inline FWaitMontageNotifyEndAwaiter WaitForMontageNotifyEnd(UAnimInstance* AnimInstance, UAnimMontage* Montage, FName NotifyName)
+{
+	return FWaitMontageNotifyEndAwaiter{AnimInstance, Montage, NotifyName};
 }
 
 } // namespace AsyncFlow

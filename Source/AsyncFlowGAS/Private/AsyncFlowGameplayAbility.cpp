@@ -96,8 +96,20 @@ void UAsyncFlowGameplayAbility::OnCoroutineCompleted()
 		return;
 	}
 
+	// Self-cancellation (FSelfCancellation) sets bCancelled but does not set Result.
+	// Guard against accessing an empty TOptional.
+	if (ActiveTask.IsCancelled())
+	{
+		UE_LOG(LogAsyncFlow, Verbose, TEXT("AsyncFlowAbility [%s] was cancelled"), *GetName());
+		if (IsActive())
+		{
+			EndAbility(CachedHandle, &CachedActorInfo, CachedActivationInfo, true, true);
+		}
+		return;
+	}
+
 	const EAbilitySuccessType Result = ActiveTask.GetResult();
-	const bool bWasCancelled = (Result == EAbilitySuccessType::Canceled) || ActiveTask.IsCancelled();
+	const bool bWasCancelled = (Result == EAbilitySuccessType::Canceled);
 
 	UE_LOG(LogAsyncFlow, Verbose, TEXT("AsyncFlowAbility [%s] completed with result: %d"),
 		*GetName(), static_cast<int32>(Result));

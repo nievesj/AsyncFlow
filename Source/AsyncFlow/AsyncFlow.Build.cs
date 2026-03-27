@@ -12,25 +12,19 @@ public class AsyncFlow : ModuleRules
 		{
 			"Core",
 			"CoreUObject",
-			"Engine"
+			"Engine",
+			"HTTP"
 		});
 
-		PrivateDependencyModuleNames.Add("HTTP");
-
-		// Optional modules — awaiters use __has_include guards, so these are
-		// only needed at link time if the corresponding headers are found.
-		AddOptionalDependency("Niagara");
-		AddOptionalDependency("UMG");
-		AddOptionalDependency("SlateCore");
-		AddOptionalDependency("MovieScene");
-		AddOptionalDependency("LevelSequence");
-	}
-
-	private void AddOptionalDependency(string ModuleName)
-	{
-		// ConditionalAddModuleDirectory is not available; use try-add pattern.
-		// These are private so they only affect this module's compilation.
-		PrivateDependencyModuleNames.Add(ModuleName);
+		// Required for awaiters guarded by __has_include. These are hard link-time
+		// dependencies when the corresponding headers are present. If your project
+		// does not enable one of these plugins, remove the line and the awaiter
+		// header will compile as a no-op via its __has_include guard.
+		PrivateDependencyModuleNames.Add("Niagara");
+		PrivateDependencyModuleNames.Add("UMG");
+		PrivateDependencyModuleNames.Add("SlateCore");
+		PrivateDependencyModuleNames.Add("MovieScene");
+		PrivateDependencyModuleNames.Add("LevelSequence");
 	}
 }
 

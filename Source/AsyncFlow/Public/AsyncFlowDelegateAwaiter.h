@@ -3,6 +3,7 @@
 
 #include "AsyncFlowTask.h"
 #include "Delegates/Delegate.h"
+#include "Delegates/DelegateCombinations.h"
 #include "Templates/Tuple.h"
 
 #include <coroutine>
@@ -13,16 +14,6 @@ namespace AsyncFlow
 // ============================================================================
 // WaitForDelegate — binds to any UE multicast delegate, resumes on broadcast
 // ============================================================================
-
-/**
- * Awaiter for UE multicast delegates.
- * Binds a lambda, suspends the coroutine, and resumes with captured arguments
- * when the delegate fires. Auto-unbinds on resume.
- *
- * Usage:
- *   co_await AsyncFlow::WaitForDelegate(MyActor->OnDestroyed);
- *   auto [DestroyedActor] = co_await AsyncFlow::WaitForDelegate(MyActor->OnDestroyed);
- */
 
 // Primary template for multicast delegates with parameters
 template <typename DelegateType>
@@ -120,14 +111,101 @@ template <typename... Args>
 }
 
 // ============================================================================
+// WaitForUnicastDelegate — binds to a unicast TDelegate, resumes on invoke
+// ============================================================================
+
+template <typename... Args>
+struct TWaitForUnicastDelegateAwaiter
+{
+	using DelegateType = TDelegate<void(Args...)>;
+	using ResultType = TTuple<std::decay_t<Args>...>;
+
+	DelegateType& Delegate;
+	TOptional<ResultType> CapturedArgs;
+	std::coroutine_handle<> Continuation;
+	TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
+
+	explicit TWaitForUnicastDelegateAwaiter(DelegateType& InDelegate)
+		: Delegate(InDelegate)
+	{
+	}
+
+	~TWaitForUnicastDelegateAwaiter() { *AliveFlag = false; }
+
+	bool await_ready() const { return false; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		Continuation = Handle;
+
+		TWeakPtr<bool> WeakAlive = AliveFlag;
+		Delegate.BindLambda([this, WeakAlive](Args... InArgs)
+		{
+			if (!WeakAlive.IsValid()) { return; }
+			CapturedArgs.Emplace(MakeTuple(InArgs...));
+			Delegate.Unbind();
+			if (Continuation && !Continuation.done())
+			{
+				Continuation.resume();
+			}
+		});
+	}
+
+	ResultType await_resume()
+	{
+		return CapturedArgs.GetValue();
+	}
+};
+
+// Void specialization for unicast
+template <>
+struct TWaitForUnicastDelegateAwaiter<>
+{
+	using DelegateType = TDelegate<void()>;
+
+	DelegateType& Delegate;
+	std::coroutine_handle<> Continuation;
+	TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
+
+	explicit TWaitForUnicastDelegateAwaiter(DelegateType& InDelegate)
+		: Delegate(InDelegate)
+	{
+	}
+
+	~TWaitForUnicastDelegateAwaiter() { *AliveFlag = false; }
+
+	bool await_ready() const { return false; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		Continuation = Handle;
+
+		TWeakPtr<bool> WeakAlive = AliveFlag;
+		Delegate.BindLambda([this, WeakAlive]()
+		{
+			if (!WeakAlive.IsValid()) { return; }
+			Delegate.Unbind();
+			if (Continuation && !Continuation.done())
+			{
+				Continuation.resume();
+			}
+		});
+	}
+
+	void await_resume() {}
+};
+
+/** Wait for a unicast delegate to fire. */
+template <typename... Args>
+[[nodiscard]] TWaitForUnicastDelegateAwaiter<Args...> WaitForDelegate(TDelegate<void(Args...)>& Delegate)
+{
+	return TWaitForUnicastDelegateAwaiter<Args...>(Delegate);
+}
+
+// ============================================================================
 // Simple callback awaiter for one-shot lambdas and non-delegate patterns
 // ============================================================================
 
-/**
- * FCallbackAwaiter
- * Generic awaiter for patterns where you need to provide a callback
- * to some async operation and resume the coroutine when it fires.
- */
 template <typename T = void>
 struct TCallbackAwaiter
 {
@@ -182,6 +260,83 @@ struct TCallbackAwaiter<void>
 		}
 	}
 };
+
+// ============================================================================
+// Chain — universal wrapper for callback-based functions
+// ============================================================================
+
+/**
+ * Wraps any function that accepts a completion callback as its last argument.
+ * The callback signature is TFunction<void(ResultArgs...)>.
+ *
+ * Usage:
+ *   auto Result = co_await AsyncFlow::Chain<int32>([](TFunction<void(int32)> Callback)
+ *   {
+ *       SomeAsyncAPI(MoveTemp(Callback));
+ *   });
+ */
+template <typename T>
+struct TChainAwaiter
+{
+	TFunction<void(TFunction<void(T)>)> SetupFunc;
+	TOptional<T> Result;
+	std::coroutine_handle<> Continuation;
+
+	bool await_ready() const { return false; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		Continuation = Handle;
+		SetupFunc([this](T Value)
+		{
+			Result.Emplace(MoveTemp(Value));
+			if (Continuation && !Continuation.done())
+			{
+				Continuation.resume();
+			}
+		});
+	}
+
+	T await_resume()
+	{
+		return MoveTemp(Result.GetValue());
+	}
+};
+
+template <>
+struct TChainAwaiter<void>
+{
+	TFunction<void(TFunction<void()>)> SetupFunc;
+	std::coroutine_handle<> Continuation;
+
+	bool await_ready() const { return false; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
+	{
+		Continuation = Handle;
+		SetupFunc([this]()
+		{
+			if (Continuation && !Continuation.done())
+			{
+				Continuation.resume();
+			}
+		});
+	}
+
+	void await_resume() {}
+};
+
+/** Wrap a callback-based async function. T is the callback parameter type (void for no result). */
+template <typename T = void>
+[[nodiscard]] TChainAwaiter<T> Chain(TFunction<void(TFunction<void(T)>)> SetupFunc)
+{
+	return TChainAwaiter<T>{MoveTemp(SetupFunc)};
+}
+
+[[nodiscard]] inline TChainAwaiter<void> Chain(TFunction<void(TFunction<void()>)> SetupFunc)
+{
+	return TChainAwaiter<void>{MoveTemp(SetupFunc)};
+}
 
 } // namespace AsyncFlow
 

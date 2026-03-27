@@ -2,6 +2,7 @@
 #pragma once
 
 #include "AsyncFlowTask.h"
+#include "AsyncFlowAwaiters.h"
 #include "AsyncFlowTickSubsystem.h"
 #include "Components/AudioComponent.h"
 #include "Engine/World.h"
@@ -19,6 +20,7 @@ struct FPlaySoundAwaiter
 {
 	UAudioComponent* AudioComponent = nullptr;
 	std::coroutine_handle<> Continuation;
+	Private::FAwaiterAliveFlag AliveFlag;
 
 	bool await_ready() const { return false; }
 
@@ -34,7 +36,6 @@ struct FPlaySoundAwaiter
 
 		AudioComponent->Play();
 
-		// FOnAudioFinished is DYNAMIC — no AddLambda. Poll IsPlaying() each tick.
 		UWorld* World = AudioComponent->GetWorld();
 		if (!World)
 		{
@@ -53,7 +54,7 @@ struct FPlaySoundAwaiter
 		Subsystem->ScheduleCondition(Handle, AudioComponent, [WeakAudio]() -> bool
 		{
 			return !WeakAudio.IsValid() || !WeakAudio->IsPlaying();
-		});
+		}, AliveFlag.Get());
 	}
 
 	void await_resume() const {}
@@ -73,6 +74,7 @@ struct FWaitAudioFinishedAwaiter
 {
 	UAudioComponent* AudioComponent = nullptr;
 	std::coroutine_handle<> Continuation;
+	Private::FAwaiterAliveFlag AliveFlag;
 
 	bool await_ready() const
 	{
@@ -107,7 +109,7 @@ struct FWaitAudioFinishedAwaiter
 		Subsystem->ScheduleCondition(Handle, AudioComponent, [WeakAudio]() -> bool
 		{
 			return !WeakAudio.IsValid() || !WeakAudio->IsPlaying();
-		});
+		}, AliveFlag.Get());
 	}
 
 	void await_resume() const {}

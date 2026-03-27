@@ -4,20 +4,47 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "Containers/Array.h"
 #include "Templates/Function.h"
+#include "Templates/SharedPointer.h"
+#include "UObject/WeakObjectPtrTemplates.h"
 
 #include <coroutine>
 
 #include "AsyncFlowTickSubsystem.generated.h"
 
+class AActor;
+
 namespace AsyncFlow::Private
 {
 
-/** Entry for a timed resume (game-time or real-time). */
+/** Time source enum for delay entries. */
+enum class EDelayTimeSource : uint8
+{
+	GameTime,
+	RealTime,
+	UnpausedTime,
+	AudioTime
+};
+
+/**
+ * Entry for a timed resume using various time sources.
+ * bAlive is shared with the awaiter; when the awaiter is destroyed mid-suspension
+ * it sets *bAlive = false and the subsystem skips the resume on the next tick.
+ */
 struct FDelayedResume
 {
 	std::coroutine_handle<> Handle;
 	double ResumeAtTime = 0.0;
-	bool bUseRealTime = false;
+	EDelayTimeSource TimeSource = EDelayTimeSource::GameTime;
+	TSharedPtr<bool> bAlive;
+};
+
+/** Entry for actor-dilated delay. */
+struct FActorDilatedResume
+{
+	std::coroutine_handle<> Handle;
+	TWeakObjectPtr<AActor> Actor;
+	float RemainingSeconds = 0.0f;
+	TSharedPtr<bool> bAlive;
 };
 
 /** Entry for a tick-count resume. */
@@ -25,6 +52,7 @@ struct FTickResume
 {
 	std::coroutine_handle<> Handle;
 	int32 RemainingTicks = 0;
+	TSharedPtr<bool> bAlive;
 };
 
 /** Entry for a condition-based resume. */
@@ -33,6 +61,7 @@ struct FConditionResume
 	std::coroutine_handle<> Handle;
 	TWeakObjectPtr<UObject> Context;
 	TFunction<bool()> Predicate;
+	TSharedPtr<bool> bAlive;
 };
 
 /**
@@ -43,6 +72,7 @@ struct FTickUpdate
 {
 	std::coroutine_handle<> Handle;
 	TFunction<bool(float DeltaTime)> UpdateFunc;
+	TSharedPtr<bool> bAlive;
 };
 
 } // namespace AsyncFlow::Private
@@ -67,31 +97,40 @@ public:
 	virtual TStatId GetStatId() const override;
 
 	/** Schedule a coroutine to resume after a delay (game-dilated time). */
-	void ScheduleDelay(std::coroutine_handle<> Handle, float Seconds);
+	void ScheduleDelay(std::coroutine_handle<> Handle, float Seconds, TSharedPtr<bool> InAlive = nullptr);
 
 	/** Schedule a coroutine to resume after a delay (real wall-clock time). */
-	void ScheduleRealDelay(std::coroutine_handle<> Handle, float Seconds);
+	void ScheduleRealDelay(std::coroutine_handle<> Handle, float Seconds, TSharedPtr<bool> InAlive = nullptr);
+
+	/** Schedule a coroutine to resume after a delay (unpaused time). */
+	void ScheduleUnpausedDelay(std::coroutine_handle<> Handle, float Seconds, TSharedPtr<bool> InAlive = nullptr);
+
+	/** Schedule a coroutine to resume after a delay (audio time). */
+	void ScheduleAudioDelay(std::coroutine_handle<> Handle, float Seconds, TSharedPtr<bool> InAlive = nullptr);
+
+	/** Schedule a coroutine to resume after Seconds scaled by an actor's CustomTimeDilation. */
+	void ScheduleActorDilatedDelay(std::coroutine_handle<> Handle, AActor* Actor, float Seconds, TSharedPtr<bool> InAlive = nullptr);
 
 	/** Schedule a coroutine to resume after N ticks. */
-	void ScheduleTicks(std::coroutine_handle<> Handle, int32 NumTicks);
+	void ScheduleTicks(std::coroutine_handle<> Handle, int32 NumTicks, TSharedPtr<bool> InAlive = nullptr);
 
 	/** Schedule a coroutine to resume when a predicate returns true. Checks each tick. */
-	void ScheduleCondition(std::coroutine_handle<> Handle, UObject* Context, TFunction<bool()> Predicate);
+	void ScheduleCondition(std::coroutine_handle<> Handle, UObject* Context, TFunction<bool()> Predicate, TSharedPtr<bool> InAlive = nullptr);
 
 	/**
 	 * Schedule a per-tick update function. Called each frame with DeltaTime.
 	 * When UpdateFunc returns true, the entry is removed and the coroutine Handle is resumed.
 	 */
-	void ScheduleTickUpdate(std::coroutine_handle<> Handle, TFunction<bool(float)> UpdateFunc);
+	void ScheduleTickUpdate(std::coroutine_handle<> Handle, TFunction<bool(float)> UpdateFunc, TSharedPtr<bool> InAlive = nullptr);
 
 	/** Remove all pending resumes associated with the given coroutine handle. */
 	void CancelHandle(std::coroutine_handle<> Handle);
 
 private:
 	TArray<AsyncFlow::Private::FDelayedResume> DelayedResumes;
+	TArray<AsyncFlow::Private::FActorDilatedResume> ActorDilatedResumes;
 	TArray<AsyncFlow::Private::FTickResume> TickResumes;
 	TArray<AsyncFlow::Private::FConditionResume> ConditionResumes;
 	TArray<AsyncFlow::Private::FTickUpdate> TickUpdates;
 };
-
 
