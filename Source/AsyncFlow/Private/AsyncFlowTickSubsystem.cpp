@@ -1,6 +1,37 @@
-﻿// AsyncFlowTickSubsystem.cpp
+﻿// MIT License
+//
+// Copyright (c) 2026 José M. Nieves
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+// AsyncFlowTickSubsystem.cpp — Tick-driven coroutine resume dispatcher.
+//
+// All five resume arrays (delayed, actor-dilated, tick-count, condition, tick-update)
+// are iterated back-to-front with RemoveAtSwap so that removal is O(1) and
+// does not invalidate indices of not-yet-visited elements.
+//
+// Each entry's bAlive flag is checked before resuming. When an awaiter is
+// destroyed mid-suspension (e.g., coroutine frame teardown from TTask::Cancel()),
+// it sets *bAlive = false. The subsystem detects this and skips the resume.
 #include "AsyncFlowTickSubsystem.h"
 #include "Engine/World.h"
+#include "GameFramework/Actor.h"
 #include "HAL/PlatformTime.h"
 #include "AsyncFlowLogging.h"
 
@@ -11,8 +42,8 @@ void UAsyncFlowTickSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UAsyncFlowTickSubsystem::Deinitialize()
 {
-	// Clear all pending entries. TTask destructors will destroy the coroutine frames.
 	DelayedResumes.Empty();
+	ActorDilatedResumes.Empty();
 	TickResumes.Empty();
 	ConditionResumes.Empty();
 	TickUpdates.Empty();
@@ -30,12 +61,29 @@ void UAsyncFlowTickSubsystem::Tick(float DeltaTime)
 
 	const double GameTime = World->GetTimeSeconds();
 	const double RealTime = FPlatformTime::Seconds();
+	const double UnpausedTime = World->GetUnpausedTimeSeconds();
+	const double AudioTime = World->GetAudioTimeSeconds();
 
-	// Process delayed resumes
+	// Process delayed resumes (all time sources)
 	for (int32 Index = DelayedResumes.Num() - 1; Index >= 0; --Index)
 	{
 		AsyncFlow::Private::FDelayedResume& Entry = DelayedResumes[Index];
-		const double CurrentTime = Entry.bUseRealTime ? RealTime : GameTime;
+
+		// Awaiter was destroyed mid-suspension — discard without touching the dead handle.
+		if (Entry.bAlive && !*Entry.bAlive)
+		{
+			DelayedResumes.RemoveAtSwap(Index);
+			continue;
+		}
+
+		double CurrentTime = 0.0;
+		switch (Entry.TimeSource)
+		{
+		case AsyncFlow::Private::EDelayTimeSource::GameTime:    CurrentTime = GameTime; break;
+		case AsyncFlow::Private::EDelayTimeSource::RealTime:    CurrentTime = RealTime; break;
+		case AsyncFlow::Private::EDelayTimeSource::UnpausedTime: CurrentTime = UnpausedTime; break;
+		case AsyncFlow::Private::EDelayTimeSource::AudioTime:   CurrentTime = AudioTime; break;
+		}
 
 		if (CurrentTime >= Entry.ResumeAtTime)
 		{
@@ -48,10 +96,48 @@ void UAsyncFlowTickSubsystem::Tick(float DeltaTime)
 		}
 	}
 
+	// Process actor-dilated resumes
+	for (int32 Index = ActorDilatedResumes.Num() - 1; Index >= 0; --Index)
+	{
+		AsyncFlow::Private::FActorDilatedResume& Entry = ActorDilatedResumes[Index];
+
+		if (Entry.bAlive && !*Entry.bAlive)
+		{
+			ActorDilatedResumes.RemoveAtSwap(Index);
+			continue;
+		}
+
+		if (!Entry.Actor.IsValid())
+		{
+			ActorDilatedResumes.RemoveAtSwap(Index);
+			continue;
+		}
+
+		const float ActorDilation = Entry.Actor->CustomTimeDilation;
+		Entry.RemainingSeconds -= DeltaTime * ActorDilation;
+
+		if (Entry.RemainingSeconds <= 0.0f)
+		{
+			std::coroutine_handle<> Handle = Entry.Handle;
+			ActorDilatedResumes.RemoveAtSwap(Index);
+			if (Handle && !Handle.done())
+			{
+				Handle.resume();
+			}
+		}
+	}
+
 	// Process tick-count resumes
 	for (int32 Index = TickResumes.Num() - 1; Index >= 0; --Index)
 	{
 		AsyncFlow::Private::FTickResume& Entry = TickResumes[Index];
+
+		if (Entry.bAlive && !*Entry.bAlive)
+		{
+			TickResumes.RemoveAtSwap(Index);
+			continue;
+		}
+
 		--Entry.RemainingTicks;
 
 		if (Entry.RemainingTicks <= 0)
@@ -70,8 +156,15 @@ void UAsyncFlowTickSubsystem::Tick(float DeltaTime)
 	{
 		AsyncFlow::Private::FConditionResume& Entry = ConditionResumes[Index];
 
-		// If context object is dead, remove the entry. TTask destructor handles cleanup.
-		if (Entry.Context.IsValid() == false && Entry.Context.IsExplicitlyNull() == false)
+		if (Entry.bAlive && !*Entry.bAlive)
+		{
+			ConditionResumes.RemoveAtSwap(Index);
+			continue;
+		}
+
+		// Detect GC'd context: the weak pointer was set (not explicitly null) but is no longer valid
+		const bool bContextWasDestroyed = !Entry.Context.IsValid() && !Entry.Context.IsExplicitlyNull();
+		if (bContextWasDestroyed)
 		{
 			ConditionResumes.RemoveAtSwap(Index);
 			continue;
@@ -93,6 +186,12 @@ void UAsyncFlowTickSubsystem::Tick(float DeltaTime)
 	{
 		AsyncFlow::Private::FTickUpdate& Entry = TickUpdates[Index];
 
+		if (Entry.bAlive && !*Entry.bAlive)
+		{
+			TickUpdates.RemoveAtSwap(Index);
+			continue;
+		}
+
 		const bool bFinished = Entry.UpdateFunc && Entry.UpdateFunc(DeltaTime);
 		if (bFinished)
 		{
@@ -111,61 +210,99 @@ TStatId UAsyncFlowTickSubsystem::GetStatId() const
 	RETURN_QUICK_DECLARE_CYCLE_STAT(UAsyncFlowTickSubsystem, STATGROUP_Tickables);
 }
 
-void UAsyncFlowTickSubsystem::ScheduleDelay(std::coroutine_handle<> Handle, float Seconds)
+void UAsyncFlowTickSubsystem::ScheduleDelay(std::coroutine_handle<> Handle, float Seconds, TSharedPtr<bool> InAlive)
 {
 	const UWorld* World = GetWorld();
-	if (!World)
-	{
-		return;
-	}
+	if (!World) { return; }
 
 	AsyncFlow::Private::FDelayedResume Entry;
 	Entry.Handle = Handle;
 	Entry.ResumeAtTime = World->GetTimeSeconds() + static_cast<double>(Seconds);
-	Entry.bUseRealTime = false;
+	Entry.TimeSource = AsyncFlow::Private::EDelayTimeSource::GameTime;
+	Entry.bAlive = MoveTemp(InAlive);
 	DelayedResumes.Add(MoveTemp(Entry));
 }
 
-void UAsyncFlowTickSubsystem::ScheduleRealDelay(std::coroutine_handle<> Handle, float Seconds)
+void UAsyncFlowTickSubsystem::ScheduleRealDelay(std::coroutine_handle<> Handle, float Seconds, TSharedPtr<bool> InAlive)
 {
 	AsyncFlow::Private::FDelayedResume Entry;
 	Entry.Handle = Handle;
 	Entry.ResumeAtTime = FPlatformTime::Seconds() + static_cast<double>(Seconds);
-	Entry.bUseRealTime = true;
+	Entry.TimeSource = AsyncFlow::Private::EDelayTimeSource::RealTime;
+	Entry.bAlive = MoveTemp(InAlive);
 	DelayedResumes.Add(MoveTemp(Entry));
 }
 
-void UAsyncFlowTickSubsystem::ScheduleTicks(std::coroutine_handle<> Handle, int32 NumTicks)
+void UAsyncFlowTickSubsystem::ScheduleUnpausedDelay(std::coroutine_handle<> Handle, float Seconds, TSharedPtr<bool> InAlive)
+{
+	const UWorld* World = GetWorld();
+	if (!World) { return; }
+
+	AsyncFlow::Private::FDelayedResume Entry;
+	Entry.Handle = Handle;
+	Entry.ResumeAtTime = World->GetUnpausedTimeSeconds() + static_cast<double>(Seconds);
+	Entry.TimeSource = AsyncFlow::Private::EDelayTimeSource::UnpausedTime;
+	Entry.bAlive = MoveTemp(InAlive);
+	DelayedResumes.Add(MoveTemp(Entry));
+}
+
+void UAsyncFlowTickSubsystem::ScheduleAudioDelay(std::coroutine_handle<> Handle, float Seconds, TSharedPtr<bool> InAlive)
+{
+	const UWorld* World = GetWorld();
+	if (!World) { return; }
+
+	AsyncFlow::Private::FDelayedResume Entry;
+	Entry.Handle = Handle;
+	Entry.ResumeAtTime = World->GetAudioTimeSeconds() + static_cast<double>(Seconds);
+	Entry.TimeSource = AsyncFlow::Private::EDelayTimeSource::AudioTime;
+	Entry.bAlive = MoveTemp(InAlive);
+	DelayedResumes.Add(MoveTemp(Entry));
+}
+
+void UAsyncFlowTickSubsystem::ScheduleActorDilatedDelay(std::coroutine_handle<> Handle, AActor* Actor, float Seconds, TSharedPtr<bool> InAlive)
+{
+	AsyncFlow::Private::FActorDilatedResume Entry;
+	Entry.Handle = Handle;
+	Entry.Actor = Actor;
+	Entry.RemainingSeconds = Seconds;
+	Entry.bAlive = MoveTemp(InAlive);
+	ActorDilatedResumes.Add(MoveTemp(Entry));
+}
+
+void UAsyncFlowTickSubsystem::ScheduleTicks(std::coroutine_handle<> Handle, int32 NumTicks, TSharedPtr<bool> InAlive)
 {
 	AsyncFlow::Private::FTickResume Entry;
 	Entry.Handle = Handle;
 	Entry.RemainingTicks = FMath::Max(NumTicks, 1);
+	Entry.bAlive = MoveTemp(InAlive);
 	TickResumes.Add(MoveTemp(Entry));
 }
 
-void UAsyncFlowTickSubsystem::ScheduleCondition(std::coroutine_handle<> Handle, UObject* Context, TFunction<bool()> Predicate)
+void UAsyncFlowTickSubsystem::ScheduleCondition(std::coroutine_handle<> Handle, UObject* Context, TFunction<bool()> Predicate, TSharedPtr<bool> InAlive)
 {
 	AsyncFlow::Private::FConditionResume Entry;
 	Entry.Handle = Handle;
 	Entry.Context = Context;
 	Entry.Predicate = MoveTemp(Predicate);
+	Entry.bAlive = MoveTemp(InAlive);
 	ConditionResumes.Add(MoveTemp(Entry));
 }
 
-void UAsyncFlowTickSubsystem::ScheduleTickUpdate(std::coroutine_handle<> Handle, TFunction<bool(float)> UpdateFunc)
+void UAsyncFlowTickSubsystem::ScheduleTickUpdate(std::coroutine_handle<> Handle, TFunction<bool(float)> UpdateFunc, TSharedPtr<bool> InAlive)
 {
 	AsyncFlow::Private::FTickUpdate Entry;
 	Entry.Handle = Handle;
 	Entry.UpdateFunc = MoveTemp(UpdateFunc);
+	Entry.bAlive = MoveTemp(InAlive);
 	TickUpdates.Add(MoveTemp(Entry));
 }
 
 void UAsyncFlowTickSubsystem::CancelHandle(std::coroutine_handle<> Handle)
 {
 	DelayedResumes.RemoveAll([Handle](const AsyncFlow::Private::FDelayedResume& E) { return E.Handle == Handle; });
+	ActorDilatedResumes.RemoveAll([Handle](const AsyncFlow::Private::FActorDilatedResume& E) { return E.Handle == Handle; });
 	TickResumes.RemoveAll([Handle](const AsyncFlow::Private::FTickResume& E) { return E.Handle == Handle; });
 	ConditionResumes.RemoveAll([Handle](const AsyncFlow::Private::FConditionResume& E) { return E.Handle == Handle; });
 	TickUpdates.RemoveAll([Handle](const AsyncFlow::Private::FTickUpdate& E) { return E.Handle == Handle; });
 }
-
 
