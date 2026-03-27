@@ -1,4 +1,34 @@
-﻿// AsyncFlowTask.h — Core coroutine type: AsyncFlow::TTask<T>
+﻿// MIT License
+//
+// Copyright (c) 2026 José M. Nieves
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+// AsyncFlowTask.h — Core coroutine type: AsyncFlow::TTask<T>
+//
+// TTask<T> is a lazily-started, move-only coroutine handle that runs on the
+// game thread. It supports cancellation, lifecycle contracts (CO_CONTRACT),
+// completion callbacks, and co_await composition with other TTask instances.
+//
+// Thread safety: TTask and FAsyncFlowState are game-thread-only, except for
+// the std::atomic fields on FAsyncFlowState which are touched from background
+// threads only in the thread-awaiter paths.
 #pragma once
 
 #include "HAL/Platform.h"
@@ -617,6 +647,11 @@ public:
 	TTask(const TTask&) = delete;
 	TTask& operator=(const TTask&) = delete;
 
+	/**
+	 * Resume the coroutine. Call once to start, subsequent calls continue from last suspension.
+	 * Copies the handle to a local before resuming — if OnCompleted destroys this TTask,
+	 * the local handle remains valid for the duration of the resume() call.
+	 */
 	void Resume()
 	{
 		if (Handle && !Handle.done())
@@ -628,8 +663,10 @@ public:
 		}
 	}
 
+	/** Start the task (alias for Resume on first call). */
 	void Start() { Resume(); }
 
+	/** Cancel this coroutine. It will stop at the next co_await (unless guarded). */
 	void Cancel()
 	{
 		if (Handle)
@@ -648,6 +685,7 @@ public:
 		return Handle && Handle.promise().FlowState->IsCancelled();
 	}
 
+	/** Returns true if the task completed without cancellation. */
 	bool WasSuccessful() const
 	{
 		return IsCompleted() && !IsCancelled();
@@ -699,13 +737,16 @@ public:
 		return Handle ? Handle.promise().FlowState->DebugName : FString();
 	}
 
+	/** Get the shared flow state (for contract registration, cancellation propagation). */
 	TSharedPtr<FAsyncFlowState> GetFlowState() const
 	{
 		return Handle ? Handle.promise().FlowState : nullptr;
 	}
 
+	/** Get the raw coroutine handle (for awaiter integration). */
 	CoroutineHandle GetHandle() const { return Handle; }
 
+	/** Get a hash for use as container key. */
 	friend uint32 GetTypeHash(const TTask& Task)
 	{
 		return ::GetTypeHash(reinterpret_cast<uintptr_t>(Task.Handle.address()));
