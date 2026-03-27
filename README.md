@@ -52,10 +52,11 @@ PublicDependencyModuleNames.Add("AsyncFlowAI");
 
 ## Quick Start
 
-**1. Include the umbrella header:**
+**1. Include the umbrella header (plus any engine-integration headers you need):**
 
 ```cpp
 #include "AsyncFlow.h"
+#include "AsyncFlowMiscAwaiters.h"  // Timeline, MoveComponentTo, etc.
 ```
 
 **2. Write a coroutine that returns `TTask<void>` or `TTask<T>`:**

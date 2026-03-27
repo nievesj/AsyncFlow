@@ -335,7 +335,9 @@ int32 Winner = co_await AsyncFlow::Race(TaskA, TaskB);
 Bind to any UE multicast delegate and suspend until it fires. Returns delegate arguments as a `TTuple`.
 
 ```cpp
-auto [Damage, Instigator] = co_await AsyncFlow::WaitForDelegate(OnTakeDamageDelegate);
+auto Args = co_await AsyncFlow::WaitForDelegate(OnTakeDamageDelegate);
+float Damage = Args.Get<0>();
+AActor* Instigator = Args.Get<1>();
 ```
 
 Void delegates:

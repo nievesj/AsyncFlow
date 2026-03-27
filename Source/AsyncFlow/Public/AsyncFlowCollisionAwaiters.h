@@ -21,6 +21,14 @@
 // SOFTWARE.
 
 // AsyncFlowCollisionAwaiters.h — Async collision query awaiters
+//
+// Wraps UWorld's async trace and overlap queries as co_awaitables.
+// Results arrive the next frame (engine-deferred). Three filter variants:
+// by-channel (default), by-object-type, and by-collision-profile.
+//
+// All awaiters resume immediately if World is null. The AliveFlag pattern
+// prevents resuming a dead coroutine frame if the awaiter is destroyed
+// mid-query.
 #pragma once
 
 #include "AsyncFlowTask.h"
@@ -39,6 +47,10 @@ namespace AsyncFlow
 // AsyncLineTrace — wraps UWorld::AsyncLineTraceByChannel
 // ============================================================================
 
+/**
+ * Awaiter for async line trace by collision channel.
+ * Binds a FTraceDelegate to receive results on the next frame.
+ */
 struct FAsyncLineTraceAwaiter
 {
 	UWorld* World = nullptr;
@@ -86,7 +98,17 @@ struct FAsyncLineTraceAwaiter
 	FTraceDatum await_resume() const { return ResultDatum; }
 };
 
-/** Async line trace. Results arrive next frame. */
+/**
+ * Perform an async line trace by collision channel.
+ *
+ * @param World      The world to trace in.
+ * @param TraceType  Single or multi-hit.
+ * @param Start      Trace start point in world space.
+ * @param End        Trace end point in world space.
+ * @param Channel    The collision channel to test.
+ * @param Params     Optional query parameters (ignore actors, etc.).
+ * @return           An awaiter — co_await yields FTraceDatum.
+ */
 [[nodiscard]] inline FAsyncLineTraceAwaiter AsyncLineTrace(
 	UWorld* World,
 	EAsyncTraceType TraceType,
@@ -102,6 +124,10 @@ struct FAsyncLineTraceAwaiter
 // AsyncSweep — wraps UWorld::AsyncSweepByChannel
 // ============================================================================
 
+/**
+ * Awaiter for async sweep by collision channel.
+ * Binds a FTraceDelegate to receive results on the next frame.
+ */
 struct FAsyncSweepAwaiter
 {
 	UWorld* World = nullptr;
@@ -151,7 +177,19 @@ struct FAsyncSweepAwaiter
 	FTraceDatum await_resume() const { return ResultDatum; }
 };
 
-/** Async sweep trace. Results arrive next frame. */
+/**
+ * Perform an async sweep by collision channel.
+ *
+ * @param World    The world.
+ * @param TraceType Single or multi-hit.
+ * @param Start    Sweep start.
+ * @param End      Sweep end.
+ * @param Rot      Shape orientation.
+ * @param Channel  Collision channel.
+ * @param Shape    Collision shape to sweep.
+ * @param Params   Optional query parameters.
+ * @return         An awaiter — co_await yields FTraceDatum.
+ */
 [[nodiscard]] inline FAsyncSweepAwaiter AsyncSweep(
 	UWorld* World,
 	EAsyncTraceType TraceType,
@@ -169,6 +207,10 @@ struct FAsyncSweepAwaiter
 // AsyncOverlap — wraps UWorld::AsyncOverlapByChannel
 // ============================================================================
 
+/**
+ * Awaiter for async overlap check by collision channel.
+ * Binds a FOverlapDelegate to receive results on the next frame.
+ */
 struct FAsyncOverlapAwaiter
 {
 	UWorld* World = nullptr;
@@ -216,7 +258,17 @@ struct FAsyncOverlapAwaiter
 	FOverlapDatum await_resume() const { return ResultDatum; }
 };
 
-/** Async overlap check. Results arrive next frame. */
+/**
+ * Perform an async overlap check by collision channel.
+ *
+ * @param World     The world.
+ * @param Position  Overlap test position.
+ * @param Rotation  Shape orientation.
+ * @param Channel   Collision channel.
+ * @param Shape     Collision shape.
+ * @param Params    Optional query parameters.
+ * @return          An awaiter — co_await yields FOverlapDatum.
+ */
 [[nodiscard]] inline FAsyncOverlapAwaiter AsyncOverlap(
 	UWorld* World,
 	const FVector& Position,
@@ -232,6 +284,9 @@ struct FAsyncOverlapAwaiter
 // ByObjectType variants — wraps UWorld::AsyncXxxByObjectType
 // ============================================================================
 
+/**
+ * Awaiter for async line trace filtered by object type.
+ */
 struct FAsyncLineTraceByObjectAwaiter
 {
 	UWorld* World = nullptr;
@@ -268,7 +323,16 @@ struct FAsyncLineTraceByObjectAwaiter
 	FTraceDatum await_resume() { return MoveTemp(ResultDatum); }
 };
 
-/** Async line trace filtered by object type. Results arrive next frame. */
+/** Async line trace filtered by object type.
+ *
+ * @param World         The world.
+ * @param TraceType     Single or multi-hit.
+ * @param Start         Trace start.
+ * @param End           Trace end.
+ * @param ObjectParams  Object types to include.
+ * @param Params        Optional query parameters.
+ * @return              An awaiter — co_await yields FTraceDatum.
+ */
 [[nodiscard]] inline FAsyncLineTraceByObjectAwaiter AsyncLineTraceByObjectType(
 	UWorld* World, EAsyncTraceType TraceType, const FVector& Start, const FVector& End,
 	const FCollisionObjectQueryParams& ObjectParams,
@@ -277,6 +341,9 @@ struct FAsyncLineTraceByObjectAwaiter
 	return FAsyncLineTraceByObjectAwaiter{World, TraceType, Start, End, ObjectParams, Params};
 }
 
+/**
+ * Awaiter for async sweep filtered by object type.
+ */
 struct FAsyncSweepByObjectAwaiter
 {
 	UWorld* World = nullptr;
@@ -314,7 +381,18 @@ struct FAsyncSweepByObjectAwaiter
 	FTraceDatum await_resume() { return MoveTemp(ResultDatum); }
 };
 
-/** Async sweep filtered by object type. Results arrive next frame. */
+/** Async sweep filtered by object type.
+ *
+ * @param World         The world.
+ * @param TraceType     Single or multi-hit.
+ * @param Start         Sweep start.
+ * @param End           Sweep end.
+ * @param Rot           Shape orientation.
+ * @param ObjectParams  Object types to include.
+ * @param Shape         Collision shape.
+ * @param Params        Optional query parameters.
+ * @return              An awaiter — co_await yields FTraceDatum.
+ */
 [[nodiscard]] inline FAsyncSweepByObjectAwaiter AsyncSweepByObjectType(
 	UWorld* World, EAsyncTraceType TraceType, const FVector& Start, const FVector& End,
 	const FQuat& Rot, const FCollisionObjectQueryParams& ObjectParams, const FCollisionShape& Shape,
@@ -323,6 +401,9 @@ struct FAsyncSweepByObjectAwaiter
 	return FAsyncSweepByObjectAwaiter{World, TraceType, Start, End, Rot, ObjectParams, Shape, Params};
 }
 
+/**
+ * Awaiter for async overlap filtered by object type.
+ */
 struct FAsyncOverlapByObjectAwaiter
 {
 	UWorld* World = nullptr;
@@ -358,7 +439,16 @@ struct FAsyncOverlapByObjectAwaiter
 	FOverlapDatum await_resume() { return MoveTemp(ResultDatum); }
 };
 
-/** Async overlap filtered by object type. Results arrive next frame. */
+/** Async overlap filtered by object type.
+ *
+ * @param World         The world.
+ * @param Position      Overlap test position.
+ * @param Rotation      Shape orientation.
+ * @param ObjectParams  Object types to include.
+ * @param Shape         Collision shape.
+ * @param Params        Optional query parameters.
+ * @return              An awaiter — co_await yields FOverlapDatum.
+ */
 [[nodiscard]] inline FAsyncOverlapByObjectAwaiter AsyncOverlapByObjectType(
 	UWorld* World, const FVector& Position, const FQuat& Rotation,
 	const FCollisionObjectQueryParams& ObjectParams, const FCollisionShape& Shape,
@@ -371,6 +461,9 @@ struct FAsyncOverlapByObjectAwaiter
 // ByProfile variants
 // ============================================================================
 
+/**
+ * Awaiter for async line trace filtered by collision profile name.
+ */
 struct FAsyncLineTraceByProfileAwaiter
 {
 	UWorld* World = nullptr;
@@ -406,7 +499,16 @@ struct FAsyncLineTraceByProfileAwaiter
 	FTraceDatum await_resume() { return MoveTemp(ResultDatum); }
 };
 
-/** Async line trace filtered by collision profile name. Results arrive next frame. */
+/** Async line trace filtered by collision profile name.
+ *
+ * @param World        The world.
+ * @param TraceType    Single or multi-hit.
+ * @param Start        Trace start.
+ * @param End          Trace end.
+ * @param ProfileName  The collision profile name (e.g., "BlockAll").
+ * @param Params       Optional query parameters.
+ * @return             An awaiter — co_await yields FTraceDatum.
+ */
 [[nodiscard]] inline FAsyncLineTraceByProfileAwaiter AsyncLineTraceByProfile(
 	UWorld* World, EAsyncTraceType TraceType, const FVector& Start, const FVector& End,
 	FName ProfileName, const FCollisionQueryParams& Params = FCollisionQueryParams::DefaultQueryParam)
@@ -451,7 +553,18 @@ struct FAsyncSweepByProfileAwaiter
 	FTraceDatum await_resume() { return MoveTemp(ResultDatum); }
 };
 
-/** Async sweep filtered by collision profile name. Results arrive next frame. */
+/** Async sweep filtered by collision profile name.
+ *
+ * @param World        The world.
+ * @param TraceType    Single or multi-hit.
+ * @param Start        Sweep start.
+ * @param End          Sweep end.
+ * @param Rot          Shape orientation.
+ * @param ProfileName  Collision profile name.
+ * @param Shape        Collision shape.
+ * @param Params       Optional query parameters.
+ * @return             An awaiter — co_await yields FTraceDatum.
+ */
 [[nodiscard]] inline FAsyncSweepByProfileAwaiter AsyncSweepByProfile(
 	UWorld* World, EAsyncTraceType TraceType, const FVector& Start, const FVector& End,
 	const FQuat& Rot, FName ProfileName, const FCollisionShape& Shape,

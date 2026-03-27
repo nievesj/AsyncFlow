@@ -21,6 +21,13 @@
 // SOFTWARE.
 
 // AsyncFlowHttpAwaiter.h — HTTP request awaiter
+//
+// Wraps IHttpRequest::ProcessRequest as a co_awaitable. The coroutine
+// suspends until the HTTP response arrives (or the connection fails).
+// Returns {FHttpResponsePtr, bSuccess} as a TTuple.
+//
+// AliveFlag prevents resuming a dead frame if the awaiter is destroyed
+// before the response arrives (e.g., coroutine cancellation).
 #pragma once
 
 #include "AsyncFlowTask.h"
@@ -38,6 +45,13 @@ namespace AsyncFlow
 // ProcessHttpRequest — sends an HTTP request and waits for the response
 // ============================================================================
 
+/**
+ * Awaiter that sends an HTTP request and waits for the response.
+ * Binds OnProcessRequestComplete and resumes with {Response, bSuccess}.
+ *
+ * Destructor invalidates the alive flag — if the response arrives after
+ * the awaiter is dead (e.g., coroutine was cancelled), the callback no-ops.
+ */
 struct FHttpRequestAwaiter
 {
 	FHttpRequestRef Request;
@@ -82,7 +96,13 @@ struct FHttpRequestAwaiter
 	}
 };
 
-/** Send an HTTP request and co_await the response. Returns {ResponsePtr, bSuccess}. */
+/**
+ * Send an HTTP request and co_await the response.
+ *
+ * @param Request  A configured FHttpRequestRef (verb, URL, headers, body).
+ * @return         An awaiter — co_await yields TTuple<FHttpResponsePtr, bool>.
+ *                 The bool is true if the connection succeeded.
+ */
 [[nodiscard]] inline FHttpRequestAwaiter ProcessHttpRequest(FHttpRequestRef Request)
 {
 	return FHttpRequestAwaiter(MoveTemp(Request));

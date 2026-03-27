@@ -21,6 +21,14 @@
 // SOFTWARE.
 
 // AsyncFlowAssetAwaiters.h — Async asset loading awaiters
+//
+// Wraps FStreamableManager and UAssetManager for non-blocking asset loading.
+// Each awaiter requests a load and resumes the coroutine when the asset is
+// ready. AliveFlag guards against resuming a dead coroutine frame if the
+// awaiter is destroyed mid-load (e.g., task cancellation).
+//
+// Single and batch variants: AsyncLoadObject, AsyncLoadClass, AsyncLoadObjects,
+// AsyncLoadClasses, AsyncLoadPrimaryAsset, AsyncLoadPrimaryAssets, AsyncLoadPackage.
 #pragma once
 
 #include "AsyncFlowTask.h"
@@ -38,6 +46,13 @@ namespace AsyncFlow
 // AsyncLoadObject — load a single soft pointer asynchronously
 // ============================================================================
 
+/**
+ * Awaiter that loads a single soft object pointer via FStreamableManager.
+ * If the asset is already loaded, await_ready returns true (no suspension).
+ * If the soft pointer is null, resumes immediately with nullptr.
+ *
+ * @tparam T  The UObject-derived type pointed to by the soft pointer.
+ */
 template <typename T>
 struct TAsyncLoadObjectAwaiter
 {
@@ -93,7 +108,13 @@ struct TAsyncLoadObjectAwaiter
 	}
 };
 
-/** Asynchronously load a soft object pointer. Returns the hard pointer when loaded. */
+/**
+ * Asynchronously load a soft object pointer.
+ *
+ * @tparam T      The asset type.
+ * @param SoftPtr The soft pointer to load.
+ * @return        An awaiter — co_await yields T* (nullptr on failure or null input).
+ */
 template <typename T>
 [[nodiscard]] TAsyncLoadObjectAwaiter<T> AsyncLoadObject(TSoftObjectPtr<T> SoftPtr)
 {
@@ -104,6 +125,13 @@ template <typename T>
 // AsyncLoadClass — load a soft class pointer asynchronously
 // ============================================================================
 
+/**
+ * Awaiter that loads a soft class pointer via FStreamableManager.
+ * If already loaded, skips suspension. If the soft pointer is null,
+ * resumes immediately with nullptr.
+ *
+ * @tparam T  The base UObject type of the class asset.
+ */
 template <typename T>
 struct TAsyncLoadClassAwaiter
 {
@@ -152,7 +180,13 @@ struct TAsyncLoadClassAwaiter
 	}
 };
 
-/** Asynchronously load a soft class pointer. Returns UClass* when loaded. */
+/**
+ * Asynchronously load a soft class pointer.
+ *
+ * @tparam T           The base type.
+ * @param SoftClassPtr The soft class pointer to load.
+ * @return             An awaiter — co_await yields UClass* (nullptr on failure).
+ */
 template <typename T>
 [[nodiscard]] TAsyncLoadClassAwaiter<T> AsyncLoadClass(TSoftClassPtr<T> SoftClassPtr)
 {
@@ -163,6 +197,11 @@ template <typename T>
 // AsyncLoadPrimaryAsset — load via AssetManager by FPrimaryAssetId
 // ============================================================================
 
+/**
+ * Awaiter that loads a primary asset by ID through UAssetManager.
+ * Uses LoadPrimaryAsset with optional bundle names. Handles the edge
+ * case where the callback fires synchronously during LoadPrimaryAsset.
+ */
 struct FAsyncLoadPrimaryAssetAwaiter
 {
 	FPrimaryAssetId AssetId;
@@ -223,7 +262,13 @@ struct FAsyncLoadPrimaryAssetAwaiter
 	}
 };
 
-/** Asynchronously load a primary asset by ID. Returns UObject* when loaded. */
+/**
+ * Asynchronously load a primary asset by ID.
+ *
+ * @param AssetId  The primary asset ID to load.
+ * @param Bundles  Optional bundle names for the load request.
+ * @return         An awaiter — co_await yields UObject* (nullptr if AssetManager is unavailable).
+ */
 inline FAsyncLoadPrimaryAssetAwaiter AsyncLoadPrimaryAsset(FPrimaryAssetId AssetId, TArray<FName> Bundles = {})
 {
 	return FAsyncLoadPrimaryAssetAwaiter{MoveTemp(AssetId), MoveTemp(Bundles)};
@@ -233,6 +278,13 @@ inline FAsyncLoadPrimaryAssetAwaiter AsyncLoadPrimaryAsset(FPrimaryAssetId Asset
 // AsyncLoadObjects — batch load multiple soft object pointers
 // ============================================================================
 
+/**
+ * Awaiter that batch-loads multiple soft object pointers in a single
+ * FStreamableManager request. More efficient than individual loads when
+ * you need several assets ready at the same time.
+ *
+ * @tparam T  The UObject-derived type of the assets.
+ */
 template <typename T>
 struct TAsyncLoadObjectsAwaiter
 {
@@ -290,7 +342,13 @@ struct TAsyncLoadObjectsAwaiter
 	}
 };
 
-/** Asynchronously load multiple soft object pointers in a batch. */
+/**
+ * Asynchronously load multiple soft object pointers in a single batch.
+ *
+ * @tparam T       The asset type.
+ * @param SoftPtrs Array of soft pointers to load.
+ * @return         An awaiter — co_await yields TArray<T*>.
+ */
 template <typename T>
 [[nodiscard]] TAsyncLoadObjectsAwaiter<T> AsyncLoadObjects(TArray<TSoftObjectPtr<T>> SoftPtrs)
 {
@@ -301,6 +359,11 @@ template <typename T>
 // AsyncLoadClasses — batch load multiple soft class pointers
 // ============================================================================
 
+/**
+ * Awaiter that batch-loads multiple soft class pointers.
+ *
+ * @tparam T  The base UObject type.
+ */
 template <typename T>
 struct TAsyncLoadClassesAwaiter
 {
@@ -358,7 +421,13 @@ struct TAsyncLoadClassesAwaiter
 	}
 };
 
-/** Asynchronously load multiple soft class pointers in a batch. */
+/**
+ * Asynchronously load multiple soft class pointers in a single batch.
+ *
+ * @tparam T            The base type.
+ * @param SoftClassPtrs Array of soft class pointers to load.
+ * @return              An awaiter — co_await yields TArray<UClass*>.
+ */
 template <typename T>
 [[nodiscard]] TAsyncLoadClassesAwaiter<T> AsyncLoadClasses(TArray<TSoftClassPtr<T>> SoftClassPtrs)
 {
@@ -369,6 +438,9 @@ template <typename T>
 // AsyncLoadPrimaryAssets — batch load by FPrimaryAssetId array
 // ============================================================================
 
+/**
+ * Awaiter that batch-loads primary assets by an array of FPrimaryAssetId.
+ */
 struct FAsyncLoadPrimaryAssetsAwaiter
 {
 	TArray<FPrimaryAssetId> AssetIds;
@@ -421,7 +493,13 @@ struct FAsyncLoadPrimaryAssetsAwaiter
 	}
 };
 
-/** Asynchronously load multiple primary assets. */
+/**
+ * Asynchronously load multiple primary assets.
+ *
+ * @param AssetIds Array of primary asset IDs.
+ * @param Bundles  Optional bundle names.
+ * @return         An awaiter — co_await yields TArray<UObject*>.
+ */
 [[nodiscard]] inline FAsyncLoadPrimaryAssetsAwaiter AsyncLoadPrimaryAssets(TArray<FPrimaryAssetId> AssetIds, TArray<FName> Bundles = {})
 {
 	return FAsyncLoadPrimaryAssetsAwaiter{MoveTemp(AssetIds), MoveTemp(Bundles)};
@@ -431,6 +509,9 @@ struct FAsyncLoadPrimaryAssetsAwaiter
 // AsyncLoadPackage — load a package asynchronously
 // ============================================================================
 
+/**
+ * Awaiter that loads a UPackage asynchronously by path.
+ */
 struct FAsyncLoadPackageAwaiter
 {
 	FString PackagePath;
@@ -461,7 +542,12 @@ struct FAsyncLoadPackageAwaiter
 	UPackage* await_resume() const { return LoadedPackage; }
 };
 
-/** Asynchronously load a package by path. Returns UPackage* when loaded. */
+/**
+ * Asynchronously load a package by path.
+ *
+ * @param PackagePath  The package path string (e.g., "/Game/Maps/MyLevel").
+ * @return             An awaiter — co_await yields UPackage* (nullptr on failure).
+ */
 [[nodiscard]] inline FAsyncLoadPackageAwaiter AsyncLoadPackage(const FString& PackagePath)
 {
 	return FAsyncLoadPackageAwaiter{PackagePath};

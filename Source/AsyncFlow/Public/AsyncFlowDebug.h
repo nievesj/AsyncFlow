@@ -21,6 +21,12 @@
 // SOFTWARE.
 
 // AsyncFlowDebug.h — Coroutine tracking and debugging utilities
+//
+// Opt-in debug infrastructure. FAsyncFlowDebugger is a process-wide singleton
+// that tracks active coroutines by ID. Register/Unregister from your coroutine
+// setup/teardown code, or use the DebugRegisterTask/DebugUnregisterTask helpers.
+//
+// Console command "AsyncFlow.List" dumps all active coroutines to the log.
 #pragma once
 
 #include "AsyncFlowTask.h"
@@ -38,11 +44,19 @@ namespace AsyncFlow
 // FCoroutineDebugInfo — per-coroutine tracking data
 // ============================================================================
 
+/** Snapshot of a single tracked coroutine's state. */
 struct FCoroutineDebugInfo
 {
+	/** Human-readable label set via TTask::SetDebugName(). */
 	FString DebugName;
+
+	/** Wall-clock time (FPlatformTime::Seconds) when Register() was called. */
 	double CreationTime = 0.0;
+
+	/** True after the coroutine reaches final_suspend. */
 	bool bCompleted = false;
+
+	/** True if Cancel() was called on the coroutine's flow state. */
 	bool bCancelled = false;
 };
 
@@ -51,30 +65,41 @@ struct FCoroutineDebugInfo
 // ============================================================================
 
 /**
- * Singleton that tracks all active coroutines for debugging.
- * Use Register/Unregister from promise constructors/final_suspend,
- * or manually via TTask::SetDebugName + Register.
+ * Process-wide singleton that tracks active coroutines for debugging.
  *
- * Console command: AsyncFlow.List — dumps all active coroutines.
+ * Thread-safe: all methods lock an internal FCriticalSection.
+ * ID is typically the coroutine handle address cast to uint64.
+ *
+ * Console command: "AsyncFlow.List" calls DumpToLog().
  */
 class ASYNCFLOW_API FAsyncFlowDebugger
 {
 public:
+	/** @return the singleton instance. Created on first call. */
 	static FAsyncFlowDebugger& Get();
 
-	/** Register a coroutine for tracking. */
+	/**
+	 * Register a coroutine for tracking.
+	 *
+	 * @param Id         Unique identifier (typically handle address).
+	 * @param DebugName  Human-readable label for log output.
+	 */
 	void Register(uint64 Id, const FString& DebugName);
 
-	/** Mark a coroutine as completed and remove from tracking. */
+	/**
+	 * Remove a coroutine from tracking.
+	 *
+	 * @param Id  The same ID passed to Register().
+	 */
 	void Unregister(uint64 Id);
 
-	/** Get all active coroutines (snapshot). */
+	/** @return a snapshot copy of all currently tracked coroutines. Thread-safe. */
 	TMap<uint64, FCoroutineDebugInfo> GetActiveCoroutines() const;
 
-	/** Get the count of currently active tracked coroutines. */
+	/** @return number of currently tracked coroutines. Thread-safe. */
 	int32 GetActiveCount() const;
 
-	/** Dump all active coroutines to the log. */
+	/** Log all active coroutines with their names and ages. */
 	void DumpToLog() const;
 
 private:
@@ -84,12 +109,15 @@ private:
 };
 
 // ============================================================================
-// Helper macros for opt-in tracking
+// Helper functions for opt-in tracking
 // ============================================================================
 
 /**
  * Register a TTask for debug tracking. Call after SetDebugName().
- * The Id is derived from the coroutine handle address.
+ * Uses the coroutine handle address as the tracking ID.
+ *
+ * @tparam T     The task's result type.
+ * @param Task   The task to register. Must be valid (IsValid() == true).
  */
 template <typename T>
 void DebugRegisterTask(TTask<T>& Task)
@@ -101,6 +129,12 @@ void DebugRegisterTask(TTask<T>& Task)
 	}
 }
 
+/**
+ * Unregister a TTask from debug tracking.
+ *
+ * @tparam T     The task's result type.
+ * @param Task   The task to unregister. Must be valid.
+ */
 template <typename T>
 void DebugUnregisterTask(TTask<T>& Task)
 {

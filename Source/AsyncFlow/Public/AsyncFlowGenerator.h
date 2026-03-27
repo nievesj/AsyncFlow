@@ -21,6 +21,11 @@
 // SOFTWARE.
 
 // AsyncFlowGenerator.h — TGenerator<T> for co_yield-based lazy iteration
+//
+// Synchronous pull-based generator. Each call to MoveNext() resumes the
+// coroutine until the next co_yield, producing one value at a time.
+// Unlike TTask, generators are not async — they run inline on the caller's
+// thread and cannot use co_await (await_transform is deleted).
 #pragma once
 
 #include "HAL/Platform.h"
@@ -40,11 +45,26 @@ class TGenerator;
 // TGeneratorPromise<T> — promise type for TGenerator<T>
 // ============================================================================
 
+/**
+ * Promise type for TGenerator<T>. Manages yielded values and frame lifetime.
+ *
+ * Yielded lvalues are stored by pointer (zero-copy). Yielded rvalues are
+ * moved into StoredValue, and CurrentValue points into that TOptional.
+ *
+ * co_await is explicitly deleted — generators are synchronous only.
+ *
+ * @tparam T  The type of each yielded value.
+ */
 template <typename T>
 struct TGeneratorPromise
 {
+	/** Holds the last yielded rvalue. Reset before each yield_value(T&&). */
 	TOptional<T> StoredValue;
+
+	/** Points to the current yielded value — either into StoredValue or directly at the lvalue. */
 	T* CurrentValue = nullptr;
+
+	/** Captured if the coroutine body throws. Rethrown in MoveNext(). */
 	std::exception_ptr Exception;
 
 	TGenerator<T> get_return_object();
@@ -52,6 +72,10 @@ struct TGeneratorPromise
 	std::suspend_always initial_suspend() const noexcept { return {}; }
 	std::suspend_always final_suspend() const noexcept { return {}; }
 
+	/**
+	 * Yield an lvalue reference. No copy — CurrentValue points directly at the caller's variable.
+	 * The reference must remain valid until the next MoveNext() call.
+	 */
 	std::suspend_always yield_value(T& Value)
 	{
 		StoredValue.Reset();
@@ -59,6 +83,10 @@ struct TGeneratorPromise
 		return {};
 	}
 
+	/**
+	 * Yield an rvalue. The value is moved into StoredValue and CurrentValue
+	 * points into the TOptional.
+	 */
 	std::suspend_always yield_value(T&& Value)
 	{
 		StoredValue.Emplace(MoveTemp(Value));
@@ -73,7 +101,7 @@ struct TGeneratorPromise
 		Exception = std::current_exception();
 	}
 
-	// Generators do not use await_transform — co_await is not supported inside generators
+	/** co_await is not supported inside generators — compile-time error. */
 	template <typename AwaiterType>
 	AwaiterType&& await_transform(AwaiterType&& Awaiter) = delete;
 };
@@ -83,23 +111,22 @@ struct TGeneratorPromise
 // ============================================================================
 
 /**
- * Lazy O(1)-memory iterator driven by co_yield.
- * Each call to operator++ (or MoveNext) resumes the coroutine until the
- * next co_yield. Supports range-based for.
+ * Lazy O(1)-memory iterator driven by co_yield. Move-only, single-owner.
+ *
+ * Each call to MoveNext() resumes the coroutine until the next co_yield
+ * or until the coroutine body returns. Current() accesses the last yielded value.
+ *
+ * Supports range-based for via begin()/end(). The iterator calls MoveNext()
+ * on construction and on each ++, so the first value is available at *begin().
+ *
+ * @tparam T  The type of each yielded value.
  *
  * Usage:
  *   TGenerator<int32> CountTo(int32 N)
  *   {
- *       for (int32 I = 0; I < N; ++I)
- *       {
- *           co_yield I;
- *       }
+ *       for (int32 I = 0; I < N; ++I) { co_yield I; }
  *   }
- *
- *   for (int32 Val : CountTo(10))
- *   {
- *       UE_LOG(LogTemp, Log, TEXT("%d"), Val);
- *   }
+ *   for (int32 Val : CountTo(10)) { ... }
  */
 template <typename T>
 class TGenerator
@@ -145,7 +172,12 @@ public:
 	TGenerator(const TGenerator&) = delete;
 	TGenerator& operator=(const TGenerator&) = delete;
 
-	/** Advance to the next yielded value. Returns false if the generator is exhausted. */
+	/**
+	 * Advance to the next yielded value.
+	 *
+	 * @return false if the generator is exhausted (coroutine returned).
+	 * @warning Rethrows any exception captured from the coroutine body.
+	 */
 	bool MoveNext()
 	{
 		if (!Handle || Handle.done())
@@ -160,7 +192,10 @@ public:
 		return !Handle.done();
 	}
 
-	/** Get the current yielded value. Only valid after MoveNext() returns true. */
+	/**
+	 * Access the current yielded value. Only valid after MoveNext() returns true.
+	 * @warning Undefined behavior if called after MoveNext() returned false.
+	 */
 	T& Current()
 	{
 		return *Handle.promise().CurrentValue;
@@ -175,6 +210,10 @@ public:
 	// STL iterator support for range-based for
 	// ========================================================================
 
+	/**
+	 * Forward iterator for range-based for. Calls MoveNext() on construction
+	 * and on each operator++. Compares done-state for termination.
+	 */
 	struct FIterator
 	{
 		TGenerator* Gen = nullptr;

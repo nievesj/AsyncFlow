@@ -62,7 +62,9 @@ Query.StartLocation = GetActorLocation();
 Query.EndLocation = TargetLocation;
 Query.NavAgentProperties = AIController->GetNavAgentPropertiesRef();
 
-auto [ResultType, Path] = co_await AsyncFlow::FindPathAsync(this, Query);
+auto Result = co_await AsyncFlow::FindPathAsync(this, Query);
+ENavigationQueryResult::Type ResultType = Result.Get<0>();
+FNavPathSharedPtr Path = Result.Get<1>();
 
 if (ResultType == ENavigationQueryResult::Success && Path.IsValid())
 {

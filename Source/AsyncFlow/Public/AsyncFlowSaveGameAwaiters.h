@@ -21,6 +21,10 @@
 // SOFTWARE.
 
 // AsyncFlowSaveGameAwaiters.h — Async save/load game awaiters
+//
+// Wraps UGameplayStatics async save/load as co_awaitables.
+// AsyncSaveGame and AsyncLoadGame use the engine's async serialization
+// path, resuming the coroutine when the I/O completes.
 #pragma once
 
 #include "AsyncFlowTask.h"
@@ -33,9 +37,15 @@ namespace AsyncFlow
 {
 
 // ============================================================================
-// AsyncSaveGame — wraps UGameplayStatics::AsyncSaveGameToSlot
+// AsyncSaveGame — async save to slot
 // ============================================================================
 
+/**
+ * Awaiter that asynchronously saves a USaveGame object to a slot.
+ * Wraps UGameplayStatics::AsyncSaveGameToSlot.
+ *
+ * @warning The save object must remain valid for the duration of the save.
+ */
 struct FAsyncSaveGameAwaiter
 {
 	USaveGame* SaveGame = nullptr;
@@ -79,16 +89,27 @@ struct FAsyncSaveGameAwaiter
 	bool await_resume() const { return bSuccess; }
 };
 
-/** Asynchronously save a game object to a slot. Returns true on success. */
+/**
+ * Asynchronously save a USaveGame to a slot.
+ *
+ * @param SaveGame  The save game object.
+ * @param SlotName  The save slot name.
+ * @param UserIndex Local user index (0 for most single-player games).
+ * @return          An awaiter — co_await yields bool (true = success).
+ */
 [[nodiscard]] inline FAsyncSaveGameAwaiter AsyncSaveGame(USaveGame* SaveGame, const FString& SlotName, int32 UserIndex = 0)
 {
 	return FAsyncSaveGameAwaiter{SaveGame, SlotName, UserIndex};
 }
 
 // ============================================================================
-// AsyncLoadGame — wraps UGameplayStatics::AsyncLoadGameFromSlot
+// AsyncLoadGame — async load from slot
 // ============================================================================
 
+/**
+ * Awaiter that asynchronously loads a USaveGame from a slot.
+ * Wraps UGameplayStatics::AsyncLoadGameFromSlot.
+ */
 struct FAsyncLoadGameAwaiter
 {
 	FString SlotName;
@@ -124,7 +145,13 @@ struct FAsyncLoadGameAwaiter
 	USaveGame* await_resume() const { return LoadedSaveGame; }
 };
 
-/** Asynchronously load a save game from a slot. Returns nullptr on failure. */
+/**
+ * Asynchronously load a USaveGame from a slot.
+ *
+ * @param SlotName  The save slot name.
+ * @param UserIndex Local user index.
+ * @return          An awaiter — co_await yields USaveGame* (nullptr on failure).
+ */
 [[nodiscard]] inline FAsyncLoadGameAwaiter AsyncLoadGame(const FString& SlotName, int32 UserIndex = 0)
 {
 	return FAsyncLoadGameAwaiter{SlotName, UserIndex};

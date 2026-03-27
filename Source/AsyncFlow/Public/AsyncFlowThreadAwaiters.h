@@ -29,6 +29,11 @@
 // inside background lambdas. Only pure computation should run off-thread.
 // The API enforces this by accepting TFunction<T()> and returning T on the
 // game thread — the "offload-and-return" pattern.
+//
+// Thread migration awaiters (MoveToGameThread, MoveToThread, MoveToTask,
+// MoveToNewThread) transfer the coroutine body between threads. After a
+// MoveToThread call, all code until the next MoveToGameThread runs on
+// that thread — UObject access is your responsibility.
 #pragma once
 
 #include "AsyncFlowTask.h"
@@ -60,9 +65,14 @@ namespace Private
 {
 
 /**
- * Heap-allocated state shared between the awaiter (coroutine frame) and the
- * game-thread callback dispatched from a background thread. Both the awaiter
- * destructor and the callback run on the game thread, so no mutex is needed.
+ * Heap-allocated state shared between a background awaiter and its
+ * game-thread resume callback. Both the awaiter destructor and the
+ * callback run on the game thread, so no mutex is needed.
+ *
+ * bAlive is set to false when the awaiter is destroyed (coroutine frame
+ * teardown). The game-thread callback checks bAlive before resuming.
+ *
+ * @tparam T  Result type, or void for no result.
  */
 template <typename T>
 struct FBackgroundSharedState
@@ -89,8 +99,13 @@ struct FBackgroundSharedState<void>
  * Awaiter that dispatches Work to the thread pool, stores the result,
  * and resumes the coroutine on the game thread.
  *
- * WARNING: The Work lambda runs OFF the game thread. Do NOT access UObjects,
- * GC-managed memory, or world state inside Work.
+ * Non-copyable, move-only. The destructor sets bAlive = false to prevent
+ * the background callback from resuming a dead frame.
+ *
+ * @tparam T  Return type of the Work lambda.
+ *
+ * @warning The Work lambda runs OFF the game thread. Do NOT access UObjects,
+ *          GC-managed memory, or world state inside Work.
  */
 template <typename T>
 struct FBackgroundTaskAwaiter
@@ -199,6 +214,9 @@ struct FBackgroundTaskAwaiter<void>
  * Offload a lambda to the thread pool. The result is returned on the game
  * thread when the coroutine resumes.
  *
+ * @param Work  Callable that runs on a worker thread. Must not access UObjects.
+ * @return      An awaiter — co_await yields the return value of Work.
+ *
  * Usage:
  *   int32 Result = co_await AsyncFlow::RunOnBackgroundThread([](){ return HeavyCompute(); });
  *   co_await AsyncFlow::RunOnBackgroundThread([](){ ExpensiveWork(); });
@@ -218,8 +236,13 @@ auto RunOnBackgroundThread(FuncType&& Work) -> FBackgroundTaskAwaiter<decltype(W
  * Awaiter that wraps an existing TFuture<T>. Blocks a thread-pool worker
  * until the future resolves, then resumes the coroutine on the game thread.
  *
+ * If the future is already resolved at the point of co_await, the result
+ * is grabbed synchronously and no suspension occurs.
+ *
  * TFuture::Then() thread affinity varies by UE version, so this awaiter
- * always marshals back via AsyncTask(GameThread) regardless.
+ * always marshals back via AsyncTask(GameThread) for consistency.
+ *
+ * @tparam T  The future's value type.
  */
 template <typename T>
 struct FFutureAwaiter
@@ -343,6 +366,9 @@ struct FFutureAwaiter<void>
 /**
  * co_await a TFuture<T>. Resumes on the game thread when the future resolves.
  *
+ * @param Future  The TFuture to wait on. Moved into the awaiter.
+ * @return        An awaiter — co_await yields T.
+ *
  * Usage:
  *   TFuture<FString> Future = SomeAsyncAPI();
  *   FString Result = co_await AsyncFlow::AwaitFuture(MoveTemp(Future));
@@ -360,19 +386,17 @@ template <typename T>
 /**
  * Offload a ParallelFor to a background thread. Each iteration calls
  * Body(Index). The coroutine resumes on the game thread when all iterations
- * are done.
+ * complete.
  *
  * ParallelFor itself distributes work across multiple cores. Wrapping it
- * in RunOnBackgroundThread prevents it from blocking the game thread while
- * the worker threads execute.
+ * in RunOnBackgroundThread prevents the game thread from blocking while
+ * worker threads execute.
  *
- * WARNING: Body runs OFF the game thread. Do NOT access UObjects inside Body.
+ * @param Num   Number of iterations.
+ * @param Body  Called for each index [0, Num). Must not access UObjects.
+ * @return      An awaiter — use with co_await.
  *
- * Usage:
- *   co_await AsyncFlow::ParallelForAsync(1000, [&Results](int32 Index)
- *   {
- *       Results[Index] = HeavyCompute(Index);
- *   });
+ * @warning Body runs OFF the game thread. No UObject access inside Body.
  */
 template <typename BodyType>
 [[nodiscard]] FBackgroundTaskAwaiter<void> ParallelForAsync(int32 Num, BodyType&& Body)
@@ -396,7 +420,9 @@ template <typename BodyType>
  * Awaiter for UE::Tasks::TTask<T>. Waits for the task on a thread-pool
  * worker and resumes the coroutine on the game thread.
  *
- * This is the recommended awaiter for the modern UE threading API.
+ * Recommended awaiter for the modern UE threading API (UE 5.4+).
+ *
+ * @tparam T  The task's result type.
  */
 template <typename T>
 struct FUETaskAwaiter
@@ -512,8 +538,10 @@ struct FUETaskAwaiter<void>
 };
 
 /**
- * co_await a UE::Tasks::TTask<T>. Resumes on the game thread when the task
- * completes.
+ * co_await a UE::Tasks::TTask<T>. Resumes on the game thread.
+ *
+ * @param Task  The UE task to wait on. Moved into the awaiter.
+ * @return      An awaiter — co_await yields T.
  *
  * Usage:
  *   UE::Tasks::TTask<int32> Task = UE::Tasks::Launch(TEXT("Compute"), [](){ return 42; });
@@ -539,7 +567,9 @@ template <typename T>
 
 /**
  * Resume the coroutine on the game thread. Use after MoveToThread/MoveToTask
- * to safely access UObjects again.
+ * to return to safe UObject territory.
+ *
+ * No-op if already on the game thread (await_ready returns true).
  */
 struct FMoveToGameThreadAwaiter
 {
@@ -568,9 +598,9 @@ struct FMoveToGameThreadAwaiter
 }
 
 /**
- * Resume the coroutine on a named UE thread (e.g., ENamedThreads::AnyBackgroundThreadNormalTask).
+ * Resume the coroutine on a named UE thread.
  *
- * WARNING: UObject access is FORBIDDEN on non-game threads.
+ * @warning UObject access is FORBIDDEN on non-game threads.
  */
 struct FMoveToThreadAwaiter
 {
@@ -603,7 +633,7 @@ struct FMoveToThreadAwaiter
  * Resume the coroutine on a UE::Tasks worker thread.
  * Efficient for sustained background computation.
  *
- * WARNING: UObject access is FORBIDDEN on task threads.
+ * @warning UObject access is FORBIDDEN on task threads.
  */
 struct FMoveToTaskAwaiter
 {
@@ -632,10 +662,10 @@ struct FMoveToTaskAwaiter
 }
 
 /**
- * Resume the coroutine on a brand-new dedicated thread.
+ * Resume the coroutine on a dedicated thread (brand new, not pooled).
  * Suitable for blocking I/O or long-running operations.
  *
- * WARNING: UObject access is FORBIDDEN on the new thread.
+ * @warning UObject access is FORBIDDEN. The thread is not reusable.
  */
 struct FMoveToNewThreadAwaiter
 {
@@ -668,8 +698,9 @@ struct FMoveToNewThreadAwaiter
 // ============================================================================
 
 /**
- * Yield the coroutine to the game thread scheduler. Does not require a world context.
- * If already on the game thread, schedules resumption via AsyncTask.
+ * Yield the coroutine to the game thread scheduler. Schedules resumption
+ * via AsyncTask — the coroutine resumes on the next available game thread
+ * dispatch. Does not require a world context.
  */
 struct FYieldAwaiter
 {
@@ -702,8 +733,14 @@ struct FYieldAwaiter
 // ============================================================================
 
 /**
- * Sleep for the specified duration on a worker thread, then resume on the game thread.
- * Does not require a world context or tick subsystem.
+ * Sleep for the specified duration on a worker thread, then resume on the
+ * game thread. Does not require a world context or tick subsystem.
+ *
+ * Less precise than Delay() (depends on OS sleep granularity).
+ * Useful for non-gameplay contexts like tools or editor scripts.
+ *
+ * @param InSeconds  Duration in wall-clock seconds. Values <= 0 resume immediately.
+ * @return           An awaiter — use with co_await.
  */
 struct FPlatformSecondsAwaiter
 {
@@ -739,6 +776,4 @@ struct FPlatformSecondsAwaiter
 }
 
 } // namespace AsyncFlow
-
-
 

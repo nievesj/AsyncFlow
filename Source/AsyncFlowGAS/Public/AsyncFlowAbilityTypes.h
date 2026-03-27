@@ -21,6 +21,11 @@
 // SOFTWARE.
 
 // AsyncFlowAbilityTypes.h — GAS-specific types for AsyncFlow
+//
+// Shared types between UAsyncFlowGameplayAbility and user ability subclasses.
+// EAbilitySuccessType maps coroutine outcomes to GAS EndAbility semantics.
+// FAbilityParams bundles all GAS activation data into a single struct for
+// convenient access from the coroutine body.
 #pragma once
 
 #include "Abilities/GameplayAbilityTypes.h"
@@ -39,50 +44,56 @@ enum class EAbilitySuccessType : uint8
 
 /**
  * FAbilityParams
- * Wraps GAS activation parameters for convenient access within coroutine-based abilities.
+ *
+ * Bundles GAS activation parameters into a single value type for the
+ * coroutine body. Passed by value into ExecuteAbility() — the coroutine
+ * frame owns its own copy.
  */
 USTRUCT(BlueprintType)
 struct ASYNCFLOWGAS_API FAbilityParams
 {
 	GENERATED_BODY()
 
+	/** The ability spec handle that triggered activation. */
 	UPROPERTY()
 	FGameplayAbilitySpecHandle Handle;
 
+	/** Actor info at the time of activation (owner, avatar, ASC). */
 	UPROPERTY()
 	FGameplayAbilityActorInfo ActorInfo;
 
+	/** Activation info (prediction key, activation mode). */
 	UPROPERTY()
 	FGameplayAbilityActivationInfo ActivationInfo;
 
+	/** Event data if the ability was activated by a gameplay event. */
 	UPROPERTY()
 	FGameplayEventData TriggerEventData;
 
-	/** Whether TriggerEventData was populated from an activation event. */
+	/** True if TriggerEventData was populated from an activation event. */
 	bool bHasTriggerEventData = false;
 
-	/** Check if this params struct has valid actor info. */
+	/** @return true if the ActorInfo has a valid OwnerActor. */
 	bool HasValidActorInfo() const
 	{
 		return ActorInfo.OwnerActor.IsValid();
 	}
 
-	/** Get the avatar actor as ACharacter, or nullptr. */
+	/** @return the avatar actor cast to ACharacter, or nullptr if not a character. */
 	ACharacter* GetAvatarCharacter() const
 	{
 		return Cast<ACharacter>(ActorInfo.AvatarActor.Get());
 	}
 
-	/** Get the owning actor. */
+	/** @return the owning actor from ActorInfo. */
 	AActor* GetOwningActor() const
 	{
 		return ActorInfo.OwnerActor.Get();
 	}
 
-	/** Get the AbilitySystemComponent from actor info. */
+	/** @return the AbilitySystemComponent from ActorInfo. */
 	UAbilitySystemComponent* GetAbilitySystemComponent() const
 	{
 		return ActorInfo.AbilitySystemComponent.Get();
 	}
 };
-

@@ -24,8 +24,14 @@
 //
 // Activation packs GAS parameters into FAbilityParams, launches ExecuteAbility()
 // as a coroutine, and maps the TTask result to EndAbility on completion.
+//
 // CancelAbility() propagates the GAS cancel signal into the coroutine's flow
-// state; the coroutine stops at the next co_await boundary.
+// state via TTask::Cancel(). The coroutine stops at the next co_await boundary
+// where TContractCheckAwaiter detects the cancellation flag.
+//
+// OnCoroutineCompleted() handles the async callback: it checks whether the
+// coroutine was cancelled (FSelfCancellation or external Cancel) before
+// accessing Result, since a cancelled coroutine may not have set one.
 #include "AsyncFlowGameplayAbility.h"
 #include "AsyncFlowAbilityTypes.h"
 #include "AsyncFlowLogging.h"
@@ -146,5 +152,3 @@ void UAsyncFlowGameplayAbility::OnCoroutineCompleted()
 		EndAbility(CachedHandle, &CachedActorInfo, CachedActivationInfo, true, bWasCancelled);
 	}
 }
-
-

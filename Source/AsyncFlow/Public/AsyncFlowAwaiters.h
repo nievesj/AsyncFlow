@@ -21,6 +21,11 @@
 // SOFTWARE.
 
 // AsyncFlowAwaiters.h — Core timing and flow control awaiters
+//
+// All awaiters in this file are game-thread-only and require a world context
+// (UObject*) to access the UAsyncFlowTickSubsystem for scheduling. If the
+// world or subsystem is unavailable, the awaiter resumes immediately to
+// prevent a permanent hang.
 #pragma once
 
 #include "AsyncFlowTask.h"
@@ -43,16 +48,20 @@ namespace AsyncFlow
 
 // ============================================================================
 // Internal helper — creates the shared bAlive flag lazily in await_suspend.
-// Exposed so inline awaiter functions can reuse the pattern without duplication.
 // ============================================================================
 
 namespace Private
 {
 
 /**
- * RAII bAlive flag shared between an awaiter and its tick-subsystem entry.
- * The awaiter sets *Flag = false on destruction; the subsystem reads it before
- * calling Handle.resume(). Null means "no tracking" (legacy code path).
+ * RAII flag shared between an awaiter and its tick-subsystem entry.
+ *
+ * When the awaiter is destroyed (coroutine frame teardown), *Flag is set
+ * to false. The subsystem reads it before calling Handle.resume() — if
+ * false, the pending entry is discarded instead of resuming a dead frame.
+ *
+ * Created lazily on first call to Get(). Null means "no tracking" (legacy path).
+ * Move-only because the flag ownership must be unique.
  */
 struct FAwaiterAliveFlag
 {
@@ -89,6 +98,10 @@ struct FAwaiterAliveFlag
 // Delay — suspends for N seconds using game-dilated time
 // ============================================================================
 
+/**
+ * Awaiter struct for game-time delays. Respects global time dilation and pause.
+ * Resumes immediately if Seconds <= 0 or the world context is null.
+ */
 struct FDelayAwaiter
 {
 	UObject* WorldContext = nullptr;
@@ -125,7 +138,13 @@ struct FDelayAwaiter
 	void await_resume() const {}
 };
 
-/** Suspend for Seconds (dilated game time). Requires a world context. */
+/**
+ * Suspend for Seconds of dilated game time.
+ *
+ * @param WorldContext  Any UObject with a valid GetWorld() (actor, component, etc.).
+ * @param Seconds      Duration in game-dilated seconds. Values <= 0 resume immediately.
+ * @return             An awaiter — use with co_await.
+ */
 [[nodiscard]] inline FDelayAwaiter Delay(UObject* WorldContext, float Seconds)
 {
 	FDelayAwaiter Aw;
@@ -138,6 +157,10 @@ struct FDelayAwaiter
 // RealDelay — suspends for N seconds using wall-clock time
 // ============================================================================
 
+/**
+ * Awaiter struct for wall-clock delays. Ignores pause and time dilation.
+ * Useful for UI animations or meta-game timers that should not freeze with the game.
+ */
 struct FRealDelayAwaiter
 {
 	UObject* WorldContext = nullptr;
@@ -174,7 +197,13 @@ struct FRealDelayAwaiter
 	void await_resume() const {}
 };
 
-/** Suspend for Seconds (real wall-clock time, ignores pause/dilation). */
+/**
+ * Suspend for Seconds of real wall-clock time. Ignores pause and dilation.
+ *
+ * @param WorldContext  Any UObject with a valid GetWorld().
+ * @param Seconds      Duration in real seconds.
+ * @return             An awaiter — use with co_await.
+ */
 [[nodiscard]] inline FRealDelayAwaiter RealDelay(UObject* WorldContext, float Seconds)
 {
 	FRealDelayAwaiter Aw;
@@ -187,6 +216,10 @@ struct FRealDelayAwaiter
 // NextTick — suspends until the next frame
 // ============================================================================
 
+/**
+ * Awaiter struct that yields for exactly one tick. Always suspends
+ * (await_ready returns false). Equivalent to Ticks(WorldContext, 1).
+ */
 struct FNextTickAwaiter
 {
 	UObject* WorldContext = nullptr;
@@ -222,7 +255,12 @@ struct FNextTickAwaiter
 	void await_resume() const {}
 };
 
-/** Suspend until the next tick. */
+/**
+ * Suspend until the next game tick.
+ *
+ * @param WorldContext  Any UObject with a valid GetWorld().
+ * @return             An awaiter — use with co_await.
+ */
 [[nodiscard]] inline FNextTickAwaiter NextTick(UObject* WorldContext)
 {
 	FNextTickAwaiter Aw;
@@ -234,6 +272,10 @@ struct FNextTickAwaiter
 // Ticks — suspends for N frames
 // ============================================================================
 
+/**
+ * Awaiter struct that yields for a specified number of ticks.
+ * Resumes immediately if NumTicks <= 0.
+ */
 struct FTicksAwaiter
 {
 	UObject* WorldContext = nullptr;
@@ -270,7 +312,13 @@ struct FTicksAwaiter
 	void await_resume() const {}
 };
 
-/** Suspend for N ticks. */
+/**
+ * Suspend for InNumTicks game ticks.
+ *
+ * @param WorldContext  Any UObject with a valid GetWorld().
+ * @param InNumTicks   Number of ticks to wait. Clamped to at least 1 in the subsystem.
+ * @return             An awaiter — use with co_await.
+ */
 [[nodiscard]] inline FTicksAwaiter Ticks(UObject* WorldContext, int32 InNumTicks)
 {
 	FTicksAwaiter Aw;
@@ -283,6 +331,14 @@ struct FTicksAwaiter
 // WaitForCondition — polls predicate each tick, resumes when true
 // ============================================================================
 
+/**
+ * Awaiter struct that checks a predicate every tick and resumes
+ * the coroutine when the predicate returns true. If the predicate
+ * is already true at the point of co_await, no suspension occurs.
+ *
+ * The Context UObject is held via TWeakObjectPtr — if it is GC'd,
+ * the condition entry is silently removed from the subsystem.
+ */
 struct FConditionAwaiter
 {
 	UObject* Context = nullptr;
@@ -322,7 +378,13 @@ struct FConditionAwaiter
 	void await_resume() const {}
 };
 
-/** Suspend until Predicate returns true. Context is used to get world and for validity checks. */
+/**
+ * Suspend until InPredicate returns true. Evaluated once per tick.
+ *
+ * @param InContext     UObject for world access and lifetime tracking.
+ * @param InPredicate  Callable returning bool. Must be safe to call from the game thread.
+ * @return             An awaiter — use with co_await.
+ */
 [[nodiscard]] inline FConditionAwaiter WaitForCondition(UObject* InContext, TFunction<bool()> InPredicate)
 {
 	FConditionAwaiter Aw;
@@ -338,6 +400,11 @@ struct FConditionAwaiter
 namespace Private
 {
 
+/**
+ * Shared state for WhenAll. Tracks remaining task count and the
+ * parent coroutine's continuation handle. When Remaining hits 0,
+ * the continuation is resumed.
+ */
 struct FWhenAllState
 {
 	std::atomic<int32> Remaining;
@@ -352,6 +419,10 @@ struct FWhenAllState
 
 } // namespace Private
 
+/**
+ * Awaiter struct for WhenAll. Suspends until all tracked tasks complete.
+ * If all tasks are already done, await_ready returns true.
+ */
 struct FWhenAllAwaiter
 {
 	TSharedPtr<Private::FWhenAllState> State;
@@ -371,7 +442,15 @@ struct FWhenAllAwaiter
 	void await_resume() const {}
 };
 
-/** Wait until all provided tasks complete. Tasks are started automatically. */
+/**
+ * Wait until all provided tasks complete. Each task is Start()-ed automatically.
+ *
+ * @param Tasks  Variadic pack of TTask references.
+ * @return       An awaiter — use with co_await.
+ *
+ * @warning Each task's OnComplete slot is consumed. Do not register
+ *          your own OnComplete before passing tasks to WhenAll.
+ */
 template <typename... TaskTypes>
 FWhenAllAwaiter WhenAll(TaskTypes&... Tasks)
 {
@@ -403,6 +482,10 @@ FWhenAllAwaiter WhenAll(TaskTypes&... Tasks)
 namespace Private
 {
 
+/**
+ * Shared state for WhenAny and Race. Tracks which task completed first
+ * via an atomic compare-exchange on bTriggered/WinnerIndex.
+ */
 struct FWhenAnyState
 {
 	std::atomic<bool> bTriggered{false};
@@ -412,6 +495,10 @@ struct FWhenAnyState
 
 } // namespace Private
 
+/**
+ * Awaiter struct for WhenAny. Suspends until one task completes.
+ * await_resume() returns the 0-based index of the winner.
+ */
 struct FWhenAnyAwaiter
 {
 	TSharedPtr<Private::FWhenAnyState> State;
@@ -433,7 +520,14 @@ struct FWhenAnyAwaiter
 	}
 };
 
-/** Wait until any one of the provided tasks completes. Returns the 0-based index of the winner. */
+/**
+ * Wait until any one of the provided tasks completes. Tasks are Start()-ed automatically.
+ *
+ * @param Tasks  Variadic pack of TTask references.
+ * @return       An awaiter — co_await yields the 0-based index of the first task to finish.
+ *
+ * @warning Non-winning tasks continue running. Use Race() to auto-cancel losers.
+ */
 template <typename... TaskTypes>
 FWhenAnyAwaiter WhenAny(TaskTypes&... Tasks)
 {
@@ -467,6 +561,10 @@ FWhenAnyAwaiter WhenAny(TaskTypes&... Tasks)
 // Race — like WhenAny but cancels all other tasks when the first completes
 // ============================================================================
 
+/**
+ * Awaiter struct for Race. Same as WhenAny but auto-cancels all
+ * non-winning tasks when the first one completes.
+ */
 struct FRaceAwaiter
 {
 	TSharedPtr<Private::FWhenAnyState> State;
@@ -502,7 +600,13 @@ struct FRaceAwaiter
 	}
 };
 
-/** Race: first task to complete wins; all others are cancelled. Returns the winner's 0-based index. */
+/**
+ * Race: first task to complete wins; all losers are cancelled.
+ * Tasks are Start()-ed automatically.
+ *
+ * @param Tasks  Variadic pack of TTask references.
+ * @return       An awaiter — co_await yields the 0-based index of the winner.
+ */
 template <typename... TaskTypes>
 FRaceAwaiter Race(TaskTypes&... Tasks)
 {
@@ -549,7 +653,13 @@ FRaceAwaiter Race(TaskTypes&... Tasks)
 // TArray overloads for WhenAll, WhenAny, Race
 // ============================================================================
 
-/** Wait until all tasks in the array complete. Tasks are started automatically. */
+/**
+ * Wait until all tasks in the array complete. Tasks are Start()-ed automatically.
+ * Null entries in the array are counted as immediately complete.
+ *
+ * @param Tasks  Array of pointers to TTask<void>. Null entries are skipped.
+ * @return       An awaiter — use with co_await.
+ */
 inline FWhenAllAwaiter WhenAll(TArray<TTask<void>*>& Tasks)
 {
 	const int32 Count = Tasks.Num();
@@ -582,7 +692,12 @@ inline FWhenAllAwaiter WhenAll(TArray<TTask<void>*>& Tasks)
 	return FWhenAllAwaiter{State};
 }
 
-/** Wait until any task in the array completes. Returns the 0-based winner index. */
+/**
+ * Wait until any task in the array completes.
+ *
+ * @param Tasks  Array of pointers to TTask<void>. Null entries are skipped.
+ * @return       An awaiter — co_await yields the 0-based winner index.
+ */
 inline FWhenAnyAwaiter WhenAny(TArray<TTask<void>*>& Tasks)
 {
 	TSharedPtr<Private::FWhenAnyState> State = MakeShared<Private::FWhenAnyState>();
@@ -613,7 +728,12 @@ inline FWhenAnyAwaiter WhenAny(TArray<TTask<void>*>& Tasks)
 	return FWhenAnyAwaiter{State};
 }
 
-/** Race with a TArray. First to complete wins; all others cancelled. */
+/**
+ * Race with a TArray. First to complete wins; all others cancelled.
+ *
+ * @param Tasks  Array of pointers to TTask<void>. Null entries get a no-op cancel function.
+ * @return       An awaiter — co_await yields the 0-based winner index.
+ */
 inline FRaceAwaiter Race(TArray<TTask<void>*>& Tasks)
 {
 	TSharedPtr<Private::FWhenAnyState> State = MakeShared<Private::FWhenAnyState>();
@@ -668,9 +788,13 @@ inline FRaceAwaiter Race(TArray<TTask<void>*>& Tasks)
 }
 
 // ============================================================================
-// UnpausedDelay — suspends using unpaused time (ticks while paused)
+// UnpausedDelay — suspends using unpaused time (continues during pause)
 // ============================================================================
 
+/**
+ * Awaiter struct for unpaused-time delays. Ticks even while the game is paused.
+ * Uses UWorld::GetUnpausedTimeSeconds() as its time source.
+ */
 struct FUnpausedDelayAwaiter
 {
 	UObject* WorldContext = nullptr;
@@ -707,7 +831,13 @@ struct FUnpausedDelayAwaiter
 	void await_resume() const {}
 };
 
-/** Suspend for Seconds using unpaused time (continues during pause). */
+/**
+ * Suspend for Seconds using unpaused time (ticks during pause).
+ *
+ * @param WorldContext  Any UObject with a valid GetWorld().
+ * @param Seconds      Duration in unpaused seconds.
+ * @return             An awaiter — use with co_await.
+ */
 [[nodiscard]] inline FUnpausedDelayAwaiter UnpausedDelay(UObject* WorldContext, float Seconds)
 {
 	FUnpausedDelayAwaiter Aw;
@@ -720,6 +850,10 @@ struct FUnpausedDelayAwaiter
 // AudioDelay — suspends using audio time
 // ============================================================================
 
+/**
+ * Awaiter struct for audio-time delays. Uses UWorld::GetAudioTimeSeconds().
+ * Audio time may drift from game time depending on engine audio settings.
+ */
 struct FAudioDelayAwaiter
 {
 	UObject* WorldContext = nullptr;
@@ -756,7 +890,13 @@ struct FAudioDelayAwaiter
 	void await_resume() const {}
 };
 
-/** Suspend for Seconds using audio time. */
+/**
+ * Suspend for Seconds using audio time.
+ *
+ * @param WorldContext  Any UObject with a valid GetWorld().
+ * @param Seconds      Duration in audio-clock seconds.
+ * @return             An awaiter — use with co_await.
+ */
 [[nodiscard]] inline FAudioDelayAwaiter AudioDelay(UObject* WorldContext, float Seconds)
 {
 	FAudioDelayAwaiter Aw;
@@ -769,6 +909,13 @@ struct FAudioDelayAwaiter
 // SecondsForActor — suspends using per-actor custom time dilation
 // ============================================================================
 
+/**
+ * Awaiter struct for actor-dilated delays. The delay is scaled by the
+ * actor's CustomTimeDilation each tick: a dilation of 2.0 halves the
+ * real wait time, 0.5 doubles it.
+ *
+ * If the actor is destroyed mid-wait, the entry is discarded.
+ */
 struct FActorDilatedDelayAwaiter
 {
 	AActor* Actor = nullptr;
@@ -805,7 +952,13 @@ struct FActorDilatedDelayAwaiter
 	void await_resume() const {}
 };
 
-/** Suspend for Seconds factoring in an actor's CustomTimeDilation. */
+/**
+ * Suspend for Seconds scaled by an actor's CustomTimeDilation.
+ *
+ * @param InActor  The actor whose CustomTimeDilation scales the delay.
+ * @param Seconds  Base duration before dilation is applied.
+ * @return         An awaiter — use with co_await.
+ */
 [[nodiscard]] inline FActorDilatedDelayAwaiter SecondsForActor(AActor* InActor, float Seconds)
 {
 	FActorDilatedDelayAwaiter Aw;
@@ -819,11 +972,12 @@ struct FActorDilatedDelayAwaiter
 // ============================================================================
 
 /**
- * Awaiter for time-sliced loop processing. Returns immediately if the tick
- * budget has not been exhausted; yields to next tick when budget runs out.
- * The AliveFlag is shared with the subsystem entry so that if the enclosing
- * coroutine frame is destroyed mid-suspension, the pending tick entry is
- * discarded safely.
+ * Awaiter for time-sliced loop processing. Checks wall-clock time at each
+ * co_await point: if the elapsed time since the tick started is still within
+ * the budget, await_ready returns true and no suspension occurs. When the
+ * budget runs out, the coroutine yields to the next tick.
+ *
+ * Use this inside tight loops that process large datasets to avoid frame spikes.
  *
  * Usage:
  *   auto Budget = AsyncFlow::FTickTimeBudget::Milliseconds(WorldContext, 2.0);
@@ -835,10 +989,18 @@ struct FActorDilatedDelayAwaiter
  */
 struct FTickTimeBudget
 {
+	/** World context for accessing the tick subsystem when yielding. */
 	UObject* WorldContext = nullptr;
+
+	/** Maximum wall-clock seconds allowed per tick before yielding. */
 	double BudgetSeconds = 0.001;
+
+	/** Wall-clock timestamp when the current tick's budget window started. */
 	double TickStartTime = 0.0;
+
+	/** False until the first co_await, when the start time is captured. */
 	bool bInitialized = false;
+
 	Private::FAwaiterAliveFlag AliveFlag;
 
 	FTickTimeBudget() = default;
@@ -847,6 +1009,13 @@ struct FTickTimeBudget
 	FTickTimeBudget(const FTickTimeBudget&) = delete;
 	FTickTimeBudget& operator=(const FTickTimeBudget&) = delete;
 
+	/**
+	 * Create a budget with a millisecond limit.
+	 *
+	 * @param InWorldContext  Any UObject with a valid GetWorld().
+	 * @param Ms             Budget in milliseconds per tick (e.g. 2.0 = 2ms).
+	 * @return               A configured FTickTimeBudget awaiter.
+	 */
 	static FTickTimeBudget Milliseconds(UObject* InWorldContext, double Ms)
 	{
 		FTickTimeBudget Budget;

@@ -21,6 +21,11 @@
 // SOFTWARE.
 
 // AsyncFlowGASAwaiters.h — GAS-specific awaiters wrapping ASC delegates
+//
+// Each awaiter binds to an AbilitySystemComponent delegate, captures the
+// first matching event, unbinds, and resumes the coroutine. All awaiters
+// clean up their delegate bindings on destruction (e.g., if the coroutine
+// is cancelled mid-wait).
 #pragma once
 
 #include "AsyncFlowTask.h"
@@ -37,6 +42,14 @@ namespace AsyncFlow
 // WaitGameplayEvent — waits for a gameplay event with a matching tag
 // ============================================================================
 
+/**
+ * Awaiter that listens for a gameplay event with a specific tag on the ASC.
+ * Binds to GenericGameplayEventCallbacks, captures FGameplayEventData,
+ * unbinds after the first matching event, and resumes the coroutine.
+ *
+ * Destructor cleans up the delegate binding if the awaiter is destroyed
+ * before the event fires (e.g., coroutine cancellation).
+ */
 struct FWaitGameplayEventAwaiter
 {
 	TWeakObjectPtr<UAbilitySystemComponent> ASC;
@@ -91,7 +104,13 @@ struct FWaitGameplayEventAwaiter
 	FGameplayEventData await_resume() const { return ResultData; }
 };
 
-/** Wait for a gameplay event with the specified tag. Returns the event data. */
+/**
+ * Wait for a gameplay event with the specified tag.
+ *
+ * @param InASC     The AbilitySystemComponent to listen on.
+ * @param EventTag  The gameplay tag to match against.
+ * @return          An awaiter — co_await yields FGameplayEventData.
+ */
 [[nodiscard]] inline FWaitGameplayEventAwaiter WaitGameplayEvent(UAbilitySystemComponent* InASC, FGameplayTag EventTag)
 {
 	return FWaitGameplayEventAwaiter{InASC, EventTag};
@@ -101,6 +120,11 @@ struct FWaitGameplayEventAwaiter
 // WaitGameplayTagAdded — waits until a gameplay tag is added to the ASC
 // ============================================================================
 
+/**
+ * Awaiter that waits until a specific gameplay tag is added to the ASC.
+ * If the tag is already present at the point of co_await, resumes immediately.
+ * Binds to RegisterGameplayTagEvent with NewOrRemoved type.
+ */
 struct FWaitGameplayTagAddedAwaiter
 {
 	TWeakObjectPtr<UAbilitySystemComponent> ASC;
@@ -161,7 +185,13 @@ struct FWaitGameplayTagAddedAwaiter
 	void await_resume() const {}
 };
 
-/** Wait until a gameplay tag is added to the ASC. */
+/**
+ * Wait until a gameplay tag is present on the ASC.
+ *
+ * @param InASC  The AbilitySystemComponent to monitor.
+ * @param Tag    The tag to wait for.
+ * @return       An awaiter — use with co_await. Returns void.
+ */
 [[nodiscard]] inline FWaitGameplayTagAddedAwaiter WaitGameplayTagAdded(UAbilitySystemComponent* InASC, FGameplayTag Tag)
 {
 	return FWaitGameplayTagAddedAwaiter{InASC, Tag};
@@ -171,6 +201,10 @@ struct FWaitGameplayTagAddedAwaiter
 // WaitGameplayTagRemoved — waits until a gameplay tag is removed from the ASC
 // ============================================================================
 
+/**
+ * Awaiter that waits until a specific gameplay tag is removed from the ASC.
+ * If the tag is already absent at the point of co_await, resumes immediately.
+ */
 struct FWaitGameplayTagRemovedAwaiter
 {
 	TWeakObjectPtr<UAbilitySystemComponent> ASC;
@@ -231,7 +265,13 @@ struct FWaitGameplayTagRemovedAwaiter
 	void await_resume() const {}
 };
 
-/** Wait until a gameplay tag is removed from the ASC. */
+/**
+ * Wait until a gameplay tag is removed from the ASC.
+ *
+ * @param InASC  The AbilitySystemComponent to monitor.
+ * @param Tag    The tag to wait for removal.
+ * @return       An awaiter — use with co_await. Returns void.
+ */
 [[nodiscard]] inline FWaitGameplayTagRemovedAwaiter WaitGameplayTagRemoved(UAbilitySystemComponent* InASC, FGameplayTag Tag)
 {
 	return FWaitGameplayTagRemovedAwaiter{InASC, Tag};
@@ -241,6 +281,11 @@ struct FWaitGameplayTagRemovedAwaiter
 // WaitAttributeChange — waits for an attribute value to change
 // ============================================================================
 
+/**
+ * Awaiter that waits for a GAS attribute to change value.
+ * Binds to GetGameplayAttributeValueChangeDelegate on the ASC.
+ * Resumes with the new value after the first change.
+ */
 struct FWaitAttributeChangeAwaiter
 {
 	TWeakObjectPtr<UAbilitySystemComponent> ASC;
@@ -291,7 +336,13 @@ struct FWaitAttributeChangeAwaiter
 	float await_resume() const { return NewValue; }
 };
 
-/** Wait for an attribute to change. Returns the new value. */
+/**
+ * Wait for a GAS attribute to change. Returns the new value.
+ *
+ * @param InASC      The AbilitySystemComponent owning the attribute.
+ * @param Attribute  The gameplay attribute to monitor.
+ * @return           An awaiter — co_await yields float (the new value).
+ */
 [[nodiscard]] inline FWaitAttributeChangeAwaiter WaitAttributeChange(UAbilitySystemComponent* InASC, FGameplayAttribute Attribute)
 {
 	return FWaitAttributeChangeAwaiter{InASC, Attribute};
@@ -301,6 +352,11 @@ struct FWaitAttributeChangeAwaiter
 // WaitGameplayEffectRemoved — waits for an active gameplay effect to be removed
 // ============================================================================
 
+/**
+ * Awaiter that waits for an active gameplay effect to be removed from the ASC.
+ * Binds to OnGameplayEffectRemoved_InfoDelegate. If the effect is already
+ * gone when the delegate pointer is requested, resumes immediately.
+ */
 struct FWaitGameplayEffectRemovedAwaiter
 {
 	TWeakObjectPtr<UAbilitySystemComponent> ASC;
@@ -357,7 +413,13 @@ struct FWaitGameplayEffectRemovedAwaiter
 	void await_resume() const {}
 };
 
-/** Wait for an active gameplay effect to be removed. */
+/**
+ * Wait for an active gameplay effect to be removed.
+ *
+ * @param InASC         The AbilitySystemComponent.
+ * @param EffectHandle  The handle of the active effect to watch.
+ * @return              An awaiter — use with co_await. Returns void.
+ */
 [[nodiscard]] inline FWaitGameplayEffectRemovedAwaiter WaitGameplayEffectRemoved(UAbilitySystemComponent* InASC, FActiveGameplayEffectHandle EffectHandle)
 {
 	return FWaitGameplayEffectRemovedAwaiter{InASC, EffectHandle};

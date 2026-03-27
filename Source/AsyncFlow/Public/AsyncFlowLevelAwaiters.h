@@ -21,6 +21,10 @@
 // SOFTWARE.
 
 // AsyncFlowLevelAwaiters.h — Level streaming awaiters
+//
+// Wraps FLatentActionInfo-based level streaming (LoadStreamLevel, UnloadStreamLevel)
+// and world travel as co_awaitables. Uses UAsyncFlowLatentAction as the bridge
+// between the latent action system and the coroutine's suspension/resume cycle.
 #pragma once
 
 #include "AsyncFlowTask.h"
@@ -36,20 +40,17 @@
 namespace AsyncFlow
 {
 
-namespace Private
-{
-	/** Thread-safe counter for unique latent action UUIDs. */
-	inline int32 GenerateLatentUUID()
-	{
-		static std::atomic<int32> Counter{100000};
-		return Counter.fetch_add(1, std::memory_order_relaxed);
-	}
-} // namespace Private
-
 // ============================================================================
-// LoadStreamLevel — polls until the level is fully loaded (and visible)
+// LoadStreamLevel — async level streaming load
 // ============================================================================
 
+/**
+ * Awaiter that loads a streaming level by name. Wraps
+ * UGameplayStatics::LoadStreamLevelBySoftObjectPtr via the latent action
+ * bridge. Resumes when the level is fully loaded and visible.
+ *
+ * If WorldContext is null, resumes immediately (no level loads).
+ */
 struct FLoadStreamLevelAwaiter
 {
 	UObject* WorldContext;
@@ -118,16 +119,28 @@ struct FLoadStreamLevelAwaiter
 	bool await_resume() const { return *SharedSuccess; }
 };
 
-/** Asynchronously load a streaming level. Returns true on success. */
+/**
+ * Load a streaming level and wait for it to become visible.
+ *
+ * @param WorldContext   Any UObject with a valid GetWorld().
+ * @param LevelName     The streaming level name (e.g., "SubLevel_Forest").
+ * @param bMakeVisible  Whether to make the level visible after loading.
+ * @param bShouldBlock  Whether to block on load (true = synchronous within the frame).
+ * @return              An awaiter — use with co_await. Returns void.
+ */
 [[nodiscard]] inline FLoadStreamLevelAwaiter LoadStreamLevel(UObject* WorldContext, FName LevelName, bool bMakeVisible = true)
 {
 	return FLoadStreamLevelAwaiter{WorldContext, LevelName, bMakeVisible};
 }
 
 // ============================================================================
-// UnloadStreamLevel — polls until the level is fully unloaded
+// UnloadStreamLevel — async level streaming unload
 // ============================================================================
 
+/**
+ * Awaiter that unloads a streaming level. Resumes when the level is
+ * fully unloaded.
+ */
 struct FUnloadStreamLevelAwaiter
 {
 	UObject* WorldContext;
@@ -186,10 +199,41 @@ struct FUnloadStreamLevelAwaiter
 	bool await_resume() const { return *SharedSuccess; }
 };
 
-/** Asynchronously unload a streaming level. Returns true on success. */
+/**
+ * Unload a streaming level and wait for it to complete.
+ *
+ * @param WorldContext  Any UObject with a valid GetWorld().
+ * @param LevelName    The streaming level name.
+ * @return             An awaiter — use with co_await. Returns void.
+ */
 [[nodiscard]] inline FUnloadStreamLevelAwaiter UnloadStreamLevel(UObject* WorldContext, FName LevelName)
 {
 	return FUnloadStreamLevelAwaiter{WorldContext, LevelName};
+}
+
+/**
+ * Open a level by name. Wraps UGameplayStatics::OpenLevel.
+ *
+ * @warning This triggers a full map transition. The coroutine will not
+ *          resume — the world (and all coroutines in it) is destroyed.
+ *
+ * @param WorldContext  Any UObject with a valid GetWorld().
+ * @param LevelName     Level name or full path.
+ * @param bAbsolute     True for absolute URL, false for relative.
+ * @param Options       Optional URL options string.
+ */
+inline void OpenLevel(UObject* WorldContext, const FString& LevelName, bool bAbsolute = true, const FString& Options = FString())
+{
+	if (!WorldContext) { return; }
+
+	UWorld* World = WorldContext->GetWorld();
+	if (!World) { return; }
+
+	FLatentActionInfo LatentInfo;
+	LatentInfo.UUID = Private::GenerateLatentUUID();
+	LatentInfo.CallbackTarget = nullptr;
+
+	UGameplayStatics::OpenLevel(WorldContext, LevelName, bAbsolute, Options);
 }
 
 } // namespace AsyncFlow

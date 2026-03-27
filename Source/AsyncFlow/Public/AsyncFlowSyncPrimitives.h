@@ -20,7 +20,13 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// AsyncFlowSyncPrimitives.h — Thread-safe synchronization awaiters
+// AsyncFlowSyncPrimitives.h — Coroutine-compatible synchronization primitives
+//
+// These are NOT OS-level primitives. They work by suspending coroutines (co_await)
+// rather than blocking threads. Multiple coroutines can wait on the same primitive
+// without blocking any threads.
+//
+// Game-thread-only. Not suitable for cross-thread synchronization.
 #pragma once
 
 #include "AsyncFlowTask.h"
@@ -35,33 +41,46 @@ namespace AsyncFlow
 {
 
 // ============================================================================
-// FAwaitableEvent — thread-safe manual-reset event that coroutines can co_await
+// FAwaitableEvent — manual-reset event for coroutines
 // ============================================================================
 
 /**
- * A manual-reset event. Coroutines that co_await a triggered event resume
- * immediately. Coroutines that co_await before Trigger() is called are
- * suspended until Trigger(). All waiters resume on the game thread.
+ * Coroutine-compatible manual-reset event. Works like FEvent, but suspends
+ * coroutines instead of blocking threads.
+ *
+ * When not signaled, co_await suspends the caller. When Signal() is called,
+ * all waiting coroutines resume. Subsequent co_awaits resume immediately
+ * until Reset() is called.
+ *
+ * Non-copyable. Typically stored as a member of a component or system.
  *
  * Usage:
- *   FAwaitableEvent Event;
- *   // In coroutine A:
- *   co_await Event;
- *   // In code B:
- *   Event.Trigger();
+ *   FAwaitableEvent DoorOpened;
+ *
+ *   // In one coroutine:
+ *   co_await DoorOpened; // suspends until Signal() is called
+ *
+ *   // In game logic:
+ *   DoorOpened.Signal(); // resumes all waiters
  */
-class FAwaitableEvent
+struct FAwaitableEvent
 {
-public:
-	FAwaitableEvent() = default;
+	/**
+	 * @return true if the event is currently in the signaled state.
+	 * co_await on a signaled event returns immediately.
+	 */
+	bool IsSignaled() const { return bSignaled; }
 
-	/** Trigger the event, resuming all waiting coroutines on the game thread. */
-	void Trigger()
+	/**
+	 * Signal the event. All currently suspended coroutines resume.
+	 * Subsequent co_awaits skip suspension until Reset() is called.
+	 */
+	void Signal()
 	{
 		TArray<std::coroutine_handle<>> LocalWaiters;
 		{
 			FScopeLock Lock(&CriticalSection);
-			bTriggered.store(true, std::memory_order_release);
+			bSignaled = true;
 			LocalWaiters = MoveTemp(Waiters);
 		}
 
@@ -77,60 +96,76 @@ public:
 		}
 	}
 
-	/** Reset the event so future co_awaits will suspend again. */
-	void Reset()
+	/**
+	 * Reset the event to the non-signaled state.
+	 * Future co_awaits will suspend again. Does not affect already-resumed coroutines.
+	 */
+	void Reset() { bSignaled = false; }
+
+	// co_await interface
+	bool await_ready() const { return bSignaled; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
 	{
 		FScopeLock Lock(&CriticalSection);
-		bTriggered.store(false, std::memory_order_release);
-	}
-
-	bool IsTriggered() const { return bTriggered.load(std::memory_order_acquire); }
-
-	// Awaitable interface
-	bool await_ready() const { return bTriggered.load(std::memory_order_acquire); }
-
-	bool await_suspend(std::coroutine_handle<> Handle)
-	{
-		FScopeLock Lock(&CriticalSection);
-		if (bTriggered.load(std::memory_order_relaxed))
+		if (bSignaled)
 		{
-			return false; // Already triggered — don't suspend
+			return; // Already signaled — don't suspend
 		}
 		Waiters.Add(Handle);
-		return true;
 	}
 
 	void await_resume() const {}
 
 private:
-	FCriticalSection CriticalSection;
+	bool bSignaled = false;
+	mutable FCriticalSection CriticalSection;
+
+	/** Suspended coroutine handles waiting for Signal(). */
 	TArray<std::coroutine_handle<>> Waiters;
-	std::atomic<bool> bTriggered{false};
 };
 
 // ============================================================================
-// FAwaitableSemaphore — thread-safe counting semaphore for coroutines
+// FAwaitableSemaphore — counting semaphore for coroutines
 // ============================================================================
 
 /**
- * A counting semaphore. Acquire() suspends if count == 0; Release()
- * increments the count and resumes one waiter. Waiters resume on the game thread.
+ * Coroutine-compatible counting semaphore. Controls concurrent access
+ * to a limited resource without blocking threads.
+ *
+ * Construct with a maximum count. co_await acquires one permit (suspends
+ * if none available). Release() returns a permit and resumes one waiter.
+ *
+ * Non-copyable. Typically stored as a member to rate-limit operations.
  *
  * Usage:
- *   FAwaitableSemaphore Sem(3); // 3 concurrent slots
- *   co_await Sem.Acquire();
- *   // ... do work ...
- *   Sem.Release();
+ *   FAwaitableSemaphore LoadSlots{3}; // allow 3 concurrent loads
+ *
+ *   co_await LoadSlots; // acquires a slot (suspends if all 3 are in use)
+ *   auto* Obj = co_await AsyncFlow::AsyncLoadObject(SoftPtr);
+ *   LoadSlots.Release(); // frees the slot for other waiters
  */
-class FAwaitableSemaphore
+struct FAwaitableSemaphore
 {
-public:
-	explicit FAwaitableSemaphore(int32 InitialCount = 0)
-		: Count(InitialCount)
+	/**
+	 * @param InMaxCount  Maximum number of concurrent permits.
+	 *                    Must be >= 1.
+	 */
+	explicit FAwaitableSemaphore(int32 InMaxCount = 1)
+		: MaxCount(InMaxCount)
 	{
+		check(InMaxCount >= 1);
 	}
 
-	/** Release one slot, potentially resuming a waiting coroutine. */
+	/** @return the number of currently available permits. */
+	int32 GetAvailable() const { return MaxCount - CurrentCount; }
+
+	/**
+	 * Return one permit. Resumes the oldest waiting coroutine, if any.
+	 *
+	 * @warning Calling Release() more times than permits were acquired
+	 *          is a programming error (CurrentCount would go negative).
+	 */
 	void Release()
 	{
 		std::coroutine_handle<> HandleToResume;
@@ -143,7 +178,7 @@ public:
 			}
 			else
 			{
-				++Count;
+				++CurrentCount;
 			}
 		}
 
@@ -156,47 +191,29 @@ public:
 		}
 	}
 
-	/** Awaiter returned by Acquire(). Suspends if count == 0. */
-	struct FAcquireAwaiter
+	// co_await interface — acquires one permit
+	bool await_ready() const { return CurrentCount < MaxCount; }
+
+	void await_suspend(std::coroutine_handle<> Handle)
 	{
-		FAwaitableSemaphore& Semaphore;
-
-		bool await_ready()
+		FScopeLock Lock(&CriticalSection);
+		if (CurrentCount < MaxCount)
 		{
-			FScopeLock Lock(&Semaphore.CriticalSection);
-			if (Semaphore.Count > 0)
-			{
-				--Semaphore.Count;
-				return true;
-			}
-			return false;
+			++CurrentCount;
+			return; // Acquired — don't suspend
 		}
-
-		bool await_suspend(std::coroutine_handle<> Handle)
-		{
-			FScopeLock Lock(&Semaphore.CriticalSection);
-			if (Semaphore.Count > 0)
-			{
-				--Semaphore.Count;
-				return false; // Acquired — don't suspend
-			}
-			Semaphore.Waiters.Add(Handle);
-			return true;
-		}
-
-		void await_resume() const {}
-	};
-
-	/** Returns an awaiter that suspends until a slot is available. */
-	[[nodiscard]] FAcquireAwaiter Acquire()
-	{
-		return FAcquireAwaiter{*this};
+		Waiters.Add(Handle);
 	}
 
+	void await_resume() {}
+
 private:
-	FCriticalSection CriticalSection;
+	int32 MaxCount = 1;
+	int32 CurrentCount = 0;
+	mutable FCriticalSection CriticalSection;
+
+	/** FIFO queue of coroutines waiting for a permit. */
 	TArray<std::coroutine_handle<>> Waiters;
-	int32 Count = 0;
 };
 
 } // namespace AsyncFlow

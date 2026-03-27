@@ -21,6 +21,10 @@
 // SOFTWARE.
 
 // AsyncFlowAudioAwaiters.h — Audio playback awaiters
+//
+// Wraps UAudioComponent playback as co_awaitables. PlaySoundAndWait starts
+// playback and waits. WaitForAudioFinished waits for an already-playing
+// component to stop. Both poll via the tick subsystem's condition scheduler.
 #pragma once
 
 #include "AsyncFlowTask.h"
@@ -38,6 +42,11 @@ namespace AsyncFlow
 // PlaySoundAndWait — plays an audio component and polls until it finishes
 // ============================================================================
 
+/**
+ * Awaiter that calls Play() on a UAudioComponent and polls each tick
+ * until IsPlaying() returns false. If the component is null or has no
+ * valid world, resumes immediately.
+ */
 struct FPlaySoundAwaiter
 {
 	UAudioComponent* AudioComponent = nullptr;
@@ -82,7 +91,12 @@ struct FPlaySoundAwaiter
 	void await_resume() const {}
 };
 
-/** Start playing audio and wait until it finishes. */
+/**
+ * Start playing audio and wait until it finishes.
+ *
+ * @param AudioComponent  The audio component to play. Null resumes immediately.
+ * @return                An awaiter — use with co_await. Returns void.
+ */
 [[nodiscard]] inline FPlaySoundAwaiter PlaySoundAndWait(UAudioComponent* AudioComponent)
 {
 	return FPlaySoundAwaiter{AudioComponent};
@@ -92,6 +106,10 @@ struct FPlaySoundAwaiter
 // WaitForAudioFinished — waits for an already-playing audio component
 // ============================================================================
 
+/**
+ * Awaiter that polls until an already-playing UAudioComponent stops.
+ * If the component is not playing at the point of co_await, resumes immediately.
+ */
 struct FWaitAudioFinishedAwaiter
 {
 	UAudioComponent* AudioComponent = nullptr;
@@ -137,7 +155,12 @@ struct FWaitAudioFinishedAwaiter
 	void await_resume() const {}
 };
 
-/** Wait for an already-playing audio component to finish. */
+/**
+ * Wait for an already-playing audio component to finish.
+ *
+ * @param AudioComponent  The audio component to monitor. Null resumes immediately.
+ * @return                An awaiter — use with co_await. Returns void.
+ */
 [[nodiscard]] inline FWaitAudioFinishedAwaiter WaitForAudioFinished(UAudioComponent* AudioComponent)
 {
 	return FWaitAudioFinishedAwaiter{AudioComponent};

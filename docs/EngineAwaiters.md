@@ -285,7 +285,9 @@ FHttpRequestRef Request = FHttpModule::Get().CreateRequest();
 Request->SetURL(TEXT("https://api.example.com/data"));
 Request->SetVerb(TEXT("GET"));
 
-auto [Response, bSuccess] = co_await AsyncFlow::ProcessHttpRequest(Request);
+auto Result = co_await AsyncFlow::ProcessHttpRequest(Request);
+FHttpResponsePtr Response = Result.Get<0>();
+bool bSuccess = Result.Get<1>();
 
 if (bSuccess && Response.IsValid())
 {

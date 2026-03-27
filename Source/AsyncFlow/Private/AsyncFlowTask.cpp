@@ -25,6 +25,11 @@
 // GCurrentFlowState is a thread-local pointer set to the active promise during
 // Resume(). It lets CO_CONTRACT and co_verifyf access the coroutine's flow state
 // without passing it explicitly through every call frame.
+//
+// FCancellationGuard reads GCurrentFlowState on construction to find the
+// enclosing coroutine, then increments/decrements CancellationGuardDepth
+// atomically. The atomic ops use acq_rel ordering because background awaiters
+// may read bCancelled from a different thread.
 #include "AsyncFlowTask.h"
 
 namespace AsyncFlow::Private

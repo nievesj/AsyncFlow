@@ -20,7 +20,13 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// AsyncFlowSequenceAwaiter.h — Level sequence playback awaiter
+// AsyncFlowSequenceAwaiter.h — Level Sequence playback awaiter
+//
+// Wraps ALevelSequenceActor playback as a co_awaitable. PlaySequenceAndWait
+// plays a sequence from a level sequence actor and suspends until it finishes.
+//
+// Guarded with __has_include — if MovieScene/LevelSequence modules are not
+// present, this header compiles to nothing.
 #pragma once
 
 #include "AsyncFlowTask.h"
@@ -34,21 +40,26 @@
 namespace AsyncFlow
 {
 
-// ============================================================================
-// PlaySequenceAndWait — plays a sequence and polls until it stops
-// ============================================================================
-
-struct FPlaySequenceAwaiter
+/**
+ * Awaiter that plays a ULevelSequence via ALevelSequenceActor and waits
+ * for it to finish. Binds to the sequence player's OnFinished delegate.
+ *
+ * If the actor or its sequence player is null, resumes immediately.
+ *
+ * @note Requires MovieScene and LevelSequence modules. This header
+ *       is a no-op if those modules are unavailable.
+ */
+struct FPlaySequenceAndWaitAwaiter
 {
 	UMovieSceneSequencePlayer* Player = nullptr;
 	std::coroutine_handle<> Continuation;
 	Private::FAwaiterAliveFlag AliveFlag;
 
-	FPlaySequenceAwaiter() = default;
-	FPlaySequenceAwaiter(FPlaySequenceAwaiter&&) noexcept = default;
-	FPlaySequenceAwaiter& operator=(FPlaySequenceAwaiter&&) noexcept = default;
-	FPlaySequenceAwaiter(const FPlaySequenceAwaiter&) = delete;
-	FPlaySequenceAwaiter& operator=(const FPlaySequenceAwaiter&) = delete;
+	FPlaySequenceAndWaitAwaiter() = default;
+	FPlaySequenceAndWaitAwaiter(FPlaySequenceAndWaitAwaiter&&) noexcept = default;
+	FPlaySequenceAndWaitAwaiter& operator=(FPlaySequenceAndWaitAwaiter&&) noexcept = default;
+	FPlaySequenceAndWaitAwaiter(const FPlaySequenceAndWaitAwaiter&) = delete;
+	FPlaySequenceAndWaitAwaiter& operator=(const FPlaySequenceAndWaitAwaiter&) = delete;
 
 	bool await_ready() const { return false; }
 
@@ -88,11 +99,16 @@ struct FPlaySequenceAwaiter
 	void await_resume() const {}
 };
 
-/** Play a sequence and wait for it to finish. */
-[[nodiscard]] inline FPlaySequenceAwaiter PlaySequenceAndWait(UMovieSceneSequencePlayer* Player)
+/**
+ * Play a level sequence and wait for it to finish.
+ *
+ * @param SequenceActor  The ALevelSequenceActor placed in the level.
+ * @return               An awaiter — use with co_await. Returns void.
+ */
+[[nodiscard]] inline FPlaySequenceAndWaitAwaiter PlaySequenceAndWait(ALevelSequenceActor* SequenceActor)
 {
-	FPlaySequenceAwaiter Aw;
-	Aw.Player = Player;
+	FPlaySequenceAndWaitAwaiter Aw;
+	Aw.Player = SequenceActor ? SequenceActor->GetSequencePlayer() : nullptr;
 	return Aw;
 }
 

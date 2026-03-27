@@ -21,6 +21,12 @@
 // SOFTWARE.
 
 // AsyncFlowGameplayAbility.h — Base coroutine-driven gameplay ability
+//
+// Subclass this instead of UGameplayAbility to write ability logic as a
+// single coroutine. Override ExecuteAbility() and use co_await on any
+// AsyncFlow awaiter. The base class maps the coroutine's EAbilitySuccessType
+// return value to EndAbility, and propagates GAS CancelAbility into the
+// coroutine's cancellation token.
 #pragma once
 
 #include "Abilities/GameplayAbility.h"
@@ -31,11 +37,18 @@
 
 /**
  * UAsyncFlowGameplayAbility
- * Base class for abilities that use C++20 coroutines for their execution flow.
  *
- * Subclasses override ExecuteAbility() which returns TTask<EAbilitySuccessType>.
- * The base handles launching the coroutine, mapping the result to EndAbility,
- * and propagating GAS cancellation to the coroutine's cancellation token.
+ * Abstract base for abilities whose execution flow is a C++20 coroutine.
+ * Override ExecuteAbility() to define the ability's behavior as straight-line
+ * async code.
+ *
+ * Lifecycle mapping:
+ * - GAS ActivateAbility → packs FAbilityParams, creates the coroutine, calls Start().
+ * - GAS CancelAbility → calls TTask::Cancel(). The coroutine stops at the next co_await.
+ * - Coroutine co_return → OnCoroutineCompleted() calls EndAbility with the appropriate bWasCancelled flag.
+ *
+ * Defaults: LocalPredicted, InstancedPerActor (suitable for single-player).
+ * Override the constructor for different policies.
  */
 UCLASS(Abstract)
 class ASYNCFLOWGAS_API UAsyncFlowGameplayAbility : public UGameplayAbility
@@ -67,22 +80,23 @@ protected:
 		bool bWasCancelled) override;
 
 	/**
-	 * Override this in subclasses. This is your ability's main logic as a coroutine.
-	 * Use co_await on AsyncFlow awaiters for async operations.
-	 * Return EAbilitySuccessType to indicate outcome.
+	 * Override in subclasses. This is the ability's main logic as a coroutine.
 	 *
-	 * Base implementation logs an error and returns Failed. Subclasses must override.
+	 * @param Params  GAS activation data (handle, actor info, trigger event).
+	 * @return        EAbilitySuccessType indicating the outcome.
+	 *
+	 * @note  Base implementation logs an error and co_returns Failed.
 	 */
 	virtual AsyncFlow::TTask<EAbilitySuccessType> ExecuteAbility(FAbilityParams Params);
 
 private:
-	/** The running coroutine task. */
+	/** The running coroutine task. Destroyed when the ability ends. */
 	AsyncFlow::TTask<EAbilitySuccessType> ActiveTask;
 
-	/** Drives the coroutine forward after the initial Start(). */
+	/** Reads the coroutine result and calls EndAbility accordingly. */
 	void OnCoroutineCompleted();
 
-	/** Cached params for EndAbility calls. */
+	/** Cached from ActivateAbility for use in EndAbility calls. */
 	FGameplayAbilitySpecHandle CachedHandle;
 	FGameplayAbilityActorInfo CachedActorInfo;
 	FGameplayAbilityActivationInfo CachedActivationInfo;

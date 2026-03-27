@@ -25,6 +25,10 @@
 // All five resume arrays (delayed, actor-dilated, tick-count, condition, tick-update)
 // are iterated back-to-front with RemoveAtSwap so that removal is O(1) and
 // does not invalidate indices of not-yet-visited elements.
+//
+// Each entry's bAlive flag is checked before resuming. When an awaiter is
+// destroyed mid-suspension (e.g., coroutine frame teardown from TTask::Cancel()),
+// it sets *bAlive = false. The subsystem detects this and skips the resume.
 #include "AsyncFlowTickSubsystem.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
