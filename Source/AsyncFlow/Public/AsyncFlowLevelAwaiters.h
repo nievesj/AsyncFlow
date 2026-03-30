@@ -40,6 +40,21 @@
 namespace AsyncFlow
 {
 
+namespace Private
+{
+
+/**
+ * Returns a unique int32 each call, used as FLatentActionInfo::UUID
+ * so concurrent latent actions never collide.
+ */
+inline int32 GenerateLatentUUID()
+{
+	static std::atomic<int32> Counter{1000000};
+	return Counter.fetch_add(1, std::memory_order_relaxed);
+}
+
+} // namespace Private
+
 // ============================================================================
 // LoadStreamLevel — async level streaming load
 // ============================================================================
@@ -125,8 +140,7 @@ struct FLoadStreamLevelAwaiter
  * @param WorldContext   Any UObject with a valid GetWorld().
  * @param LevelName     The streaming level name (e.g., "SubLevel_Forest").
  * @param bMakeVisible  Whether to make the level visible after loading.
- * @param bShouldBlock  Whether to block on load (true = synchronous within the frame).
- * @return              An awaiter — use with co_await. Returns void.
+ * @return              An awaiter — use with co_await. Returns true on success.
  */
 [[nodiscard]] inline FLoadStreamLevelAwaiter LoadStreamLevel(UObject* WorldContext, FName LevelName, bool bMakeVisible = true)
 {
@@ -229,11 +243,7 @@ inline void OpenLevel(UObject* WorldContext, const FString& LevelName, bool bAbs
 	UWorld* World = WorldContext->GetWorld();
 	if (!World) { return; }
 
-	FLatentActionInfo LatentInfo;
-	LatentInfo.UUID = Private::GenerateLatentUUID();
-	LatentInfo.CallbackTarget = nullptr;
-
-	UGameplayStatics::OpenLevel(WorldContext, LevelName, bAbsolute, Options);
+	UGameplayStatics::OpenLevel(WorldContext, FName(*LevelName), bAbsolute, Options);
 }
 
 } // namespace AsyncFlow
