@@ -294,7 +294,7 @@ for (FItem& Item : BigArray)
 
 ### WhenAll
 
-Wait for all tasks to complete. Tasks are started automatically.
+Wait for all tasks to complete. Tasks are started automatically. Returns a `[[nodiscard]]` awaiter — calling `WhenAll(...)` without `co_await` is a compile warning.
 
 ```cpp
 AsyncFlow::TTask<void> TaskA = DoThingA();
@@ -311,7 +311,7 @@ co_await AsyncFlow::WhenAll(Tasks);
 
 ### WhenAny
 
-Wait for the first task to complete. Returns the 0-based index of the winner.
+Wait for the first task to complete. Returns the 0-based index of the winner. Returns a `[[nodiscard]]` awaiter — calling `WhenAny(...)` without `co_await` is a compile warning.
 
 ```cpp
 int32 Winner = co_await AsyncFlow::WhenAny(TaskA, TaskB);
@@ -319,7 +319,7 @@ int32 Winner = co_await AsyncFlow::WhenAny(TaskA, TaskB);
 
 ### Race
 
-Like `WhenAny`, but cancels all other tasks when the first completes.
+Like `WhenAny`, but cancels all other tasks when the first completes. Returns a `[[nodiscard]]` awaiter — calling `Race(...)` without `co_await` is a compile warning.
 
 ```cpp
 int32 Winner = co_await AsyncFlow::Race(TaskA, TaskB);
@@ -394,6 +394,54 @@ The latent action manages the coroutine lifetime. If the owning UObject is destr
 
 ---
 
+## Coroutine Parameter Safety
+
+Coroutine functions copy or move their parameters into the coroutine frame before the first suspension point. Parameters that are references or raw pointers bind to the caller's locals — those locals may be destroyed long before the coroutine resumes.
+
+**Never pass `const T&`, `T&`, or `T*` parameters to a coroutine function.**
+
+```cpp
+// WRONG — Name is a reference to a caller local.
+// After the first co_await, the caller's stack frame may be gone.
+AsyncFlow::TTask<void> ProcessName(const FString& Name)
+{
+    co_await AsyncFlow::Delay(this, 1.0f);
+    UE_LOG(LogTemp, Log, TEXT("%s"), *Name);  // Name dangles — undefined behavior
+}
+
+// CORRECT — Name is copied into the coroutine frame at call time.
+AsyncFlow::TTask<void> ProcessName(FString Name)
+{
+    co_await AsyncFlow::Delay(this, 1.0f);
+    UE_LOG(LogTemp, Log, TEXT("%s"), *Name);  // Safe
+}
+```
+
+For large objects where copying is expensive, pass by `TSharedPtr<T>` or move ownership in:
+
+```cpp
+// TSharedPtr — shared ownership, no dangling risk
+AsyncFlow::TTask<void> ProcessData(TSharedPtr<FLargeData> Data)
+{
+    co_await AsyncFlow::Delay(this, 1.0f);
+    Data->Process();
+}
+
+// Move — transfers ownership into the frame
+AsyncFlow::TTask<void> ConsumeData(FLargeData Data)
+{
+    co_await AsyncFlow::Delay(this, 1.0f);
+    Data.Process();
+}
+
+// Calling site
+ConsumeData(MoveTemp(LocalData));
+```
+
+This applies to all `TTask<T>` coroutines regardless of whether they are immediately `Start()`ed or stored for later.
+
+---
+
 ## TGenerator\<T\>
 
 Synchronous pull-based generator driven by `co_yield`. O(1) memory. Supports range-based for loops.
@@ -443,4 +491,3 @@ Scheduling methods (used internally by awaiters):
 | `ScheduleTicks` | Frame count |
 | `ScheduleCondition` | Predicate polling |
 | `ScheduleTickUpdate` | Per-frame callback (returns true when done) |
-

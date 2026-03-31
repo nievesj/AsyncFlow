@@ -45,6 +45,7 @@
 
 #include <coroutine>
 #include <atomic>
+#include <exception>
 
 // UE::Tasks (UE 5.4+)
 #if __has_include("Tasks/Task.h")
@@ -78,6 +79,7 @@ template <typename T>
 struct FBackgroundSharedState
 {
 	TOptional<T> Result;
+	std::exception_ptr Exception;
 	std::coroutine_handle<> Handle;
 	bool bAlive = true;
 };
@@ -85,6 +87,7 @@ struct FBackgroundSharedState
 template <>
 struct FBackgroundSharedState<void>
 {
+	std::exception_ptr Exception;
 	std::coroutine_handle<> Handle;
 	bool bAlive = true;
 };
@@ -142,20 +145,35 @@ struct FBackgroundTaskAwaiter
 
 		Async(EAsyncExecution::ThreadPool, [SharedState, WorkCopy = MoveTemp(WorkCopy)]() mutable
 		{
-			T Computed = WorkCopy();
-			AsyncTask(ENamedThreads::GameThread, [SharedState, Computed = MoveTemp(Computed)]() mutable
+			try
 			{
-				if (SharedState->bAlive)
+				T Computed = WorkCopy();
+				AsyncTask(ENamedThreads::GameThread, [SharedState, Computed = MoveTemp(Computed)]() mutable
 				{
-					SharedState->Result.Emplace(MoveTemp(Computed));
-					SharedState->Handle.resume();
-				}
-			});
+					if (SharedState->bAlive)
+					{
+						SharedState->Result.Emplace(MoveTemp(Computed));
+						SharedState->Handle.resume();
+					}
+				});
+			}
+			catch (...)
+			{
+				AsyncTask(ENamedThreads::GameThread, [SharedState, Ex = std::current_exception()]()
+				{
+					if (SharedState->bAlive)
+					{
+						SharedState->Exception = Ex;
+						SharedState->Handle.resume();
+					}
+				});
+			}
 		});
 	}
 
 	T await_resume()
 	{
+		if (State->Exception) { std::rethrow_exception(State->Exception); }
 		return MoveTemp(State->Result.GetValue());
 	}
 };
@@ -196,18 +214,35 @@ struct FBackgroundTaskAwaiter<void>
 
 		Async(EAsyncExecution::ThreadPool, [SharedState, WorkCopy = MoveTemp(WorkCopy)]() mutable
 		{
-			WorkCopy();
-			AsyncTask(ENamedThreads::GameThread, [SharedState]()
+			try
 			{
-				if (SharedState->bAlive)
+				WorkCopy();
+				AsyncTask(ENamedThreads::GameThread, [SharedState]()
 				{
-					SharedState->Handle.resume();
-				}
-			});
+					if (SharedState->bAlive)
+					{
+						SharedState->Handle.resume();
+					}
+				});
+			}
+			catch (...)
+			{
+				AsyncTask(ENamedThreads::GameThread, [SharedState, Ex = std::current_exception()]()
+				{
+					if (SharedState->bAlive)
+					{
+						SharedState->Exception = Ex;
+						SharedState->Handle.resume();
+					}
+				});
+			}
 		});
 	}
 
-	void await_resume() {}
+	void await_resume()
+	{
+		if (State->Exception) { std::rethrow_exception(State->Exception); }
+	}
 };
 
 /**
@@ -222,7 +257,7 @@ struct FBackgroundTaskAwaiter<void>
  *   co_await AsyncFlow::RunOnBackgroundThread([](){ ExpensiveWork(); });
  */
 template <typename FuncType>
-auto RunOnBackgroundThread(FuncType&& Work) -> FBackgroundTaskAwaiter<decltype(Work())>
+[[nodiscard]] auto RunOnBackgroundThread(FuncType&& Work) -> FBackgroundTaskAwaiter<decltype(Work())>
 {
 	using ReturnType = decltype(Work());
 	return FBackgroundTaskAwaiter<ReturnType>(TFunction<ReturnType()>(Forward<FuncType>(Work)));

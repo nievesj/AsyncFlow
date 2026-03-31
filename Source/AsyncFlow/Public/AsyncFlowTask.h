@@ -33,6 +33,22 @@
 // Ownership model: TTask owns its coroutine frame. When TTask is destroyed,
 // the frame is destroyed with it. Move assignment destroys the previous frame.
 // Copy is deleted — coroutine frames are single-owner resources.
+//
+// WARNING — Coroutine parameter lifetimes (Rule 21):
+//   Coroutine functions copy/move their parameters into the coroutine frame
+//   before the first suspension point. Reference and pointer parameters bind
+//   to the CALLER's locals, which may be destroyed before the coroutine
+//   resumes. This causes silent dangling references.
+//
+//   NEVER pass reference or raw-pointer parameters to a coroutine function:
+//
+//     // WRONG — FString& dangles after first co_await:
+//     TTask<void> BadCoroutine(const FString& Name) { co_await ...; UE_LOG(..., *Name); }
+//
+//     // CORRECT — copy by value:
+//     TTask<void> GoodCoroutine(FString Name) { co_await ...; UE_LOG(..., *Name); }
+//
+//   For large objects, use TSharedPtr or move semantics.
 #pragma once
 
 #include "HAL/Platform.h"
