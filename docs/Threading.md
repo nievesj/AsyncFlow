@@ -26,6 +26,36 @@ co_await AsyncFlow::RunOnBackgroundThread([]()
 // Back on game thread
 ```
 
+`RunOnBackgroundThread` is `[[nodiscard]]` — calling it without `co_await` is a compile warning.
+
+### Exception Handling
+
+Exceptions thrown inside the `Work` lambda are caught on the background thread and marshaled back to the game thread. They are re-thrown at the `co_await` site in the coroutine.
+
+```cpp
+AsyncFlow::TTask<void> UMyComponent::ProcessData()
+{
+    try
+    {
+        FResult Result = co_await AsyncFlow::RunOnBackgroundThread([]()
+        {
+            if (!LoadData())
+            {
+                throw std::runtime_error("Failed to load data");
+            }
+            return ComputeResult();
+        });
+        ApplyResult(Result);
+    }
+    catch (const std::exception& Ex)
+    {
+        UE_LOG(LogTemp, Error, TEXT("Background work failed: %s"), UTF8_TO_TCHAR(Ex.what()));
+    }
+}
+```
+
+This guarantee applies only to `RunOnBackgroundThread`. `AwaitFuture` and the thread migration awaiters (`MoveToThread`, `MoveToTask`, `MoveToNewThread`) do not catch exceptions — an unhandled exception from those contexts will terminate the process.
+
 ---
 
 ## AwaitFuture
@@ -193,4 +223,3 @@ AsyncFlow::TTask<void> UMyComponent::ProcessLargeDataSet()
 - UObject pointers, `GetWorld()`, GC-managed memory, and any engine API that requires the game thread are **forbidden** in off-thread contexts.
 - The alive-flag pattern (`FAwaiterAliveFlag`) prevents stale resumes if the coroutine frame is destroyed while the background work is in flight.
 - `ParallelFor` distributes work across cores. Wrapping it in `RunOnBackgroundThread` prevents it from blocking the game thread.
-

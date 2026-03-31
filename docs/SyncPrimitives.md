@@ -69,11 +69,13 @@ DataReadyEvent.Reset();
 
 `FAwaitableEvent` is thread-safe. `Signal()` and `Reset()` can be called from any thread. Waiters always resume on the game thread via `AsyncTask(ENamedThreads::GameThread)`.
 
+`await_suspend` returns `bool`. If `Signal()` fires in the window between `await_ready` and `await_suspend`, the coroutine is not suspended — it continues immediately rather than hanging indefinitely waiting for a signal that already fired.
+
 ---
 
 ## FAwaitableSemaphore
 
-Counting semaphore for coroutines. `co_await` on the semaphore suspends if no permits are available. `Release()` returns a permit and resumes one waiter.
+Counting semaphore for coroutines. Every `co_await` enters `await_suspend` and acquires a permit atomically under a lock — there is no fast-path bypass. If a permit is available, the count is incremented and the coroutine continues without suspending. If all permits are in use, the coroutine is enqueued and suspended.
 
 All waiters resume on the game thread.
 
@@ -82,8 +84,8 @@ All waiters resume on the game thread.
 | Method | Description |
 |--------|-------------|
 | `FAwaitableSemaphore(int32 MaxCount)` | Construct with a maximum permit count (>= 1). |
-| `co_await Semaphore` | Acquires one permit. Suspends if all permits are in use. |
-| `Release()` | Returns one permit or resumes one waiting coroutine. |
+| `co_await Semaphore` | Acquires one permit under the lock. Suspends if all permits are in use. |
+| `Release()` | If there are waiters, resumes the oldest (FIFO) and hands it the permit directly (count unchanged). If no waiters, decrements the count. |
 | `GetAvailable()` | Returns the number of currently available permits. |
 
 ### Usage — Concurrency Limiting
@@ -104,9 +106,69 @@ AsyncFlow::TTask<void> UMyComponent::DoWork()
 }
 ```
 
+> **Warning:** Calling `Release()` manually is unsafe if the coroutine can be cancelled between `co_await Semaphore` and `Semaphore.Release()`. A cancellation in that window leaks the permit permanently. Prefer `FSemaphoreGuard` or `AcquireGuarded()` (see below).
+
 ### Thread Safety
 
-`FAwaitableSemaphore` is thread-safe. `Release()` can be called from any thread. Waiters always resume on the game thread.
+`FAwaitableSemaphore` is thread-safe. `Release()` can be called from any thread. Waiters always resume on the game thread. All permit acquisition and waiter enqueuing is serialized through an internal lock.
+
+---
+
+## FSemaphoreGuard
+
+RAII permit holder for `FAwaitableSemaphore`. Calls `Release()` on destruction. Move-only — cannot be copied.
+
+Prevents permit leaks when a coroutine is cancelled or an early return occurs after a permit is acquired.
+
+### API
+
+| Method | Description |
+|--------|-------------|
+| `FSemaphoreGuard(FAwaitableSemaphore&)` | Constructs a guard that owns one permit on the given semaphore. |
+| `Release()` | Releases the permit immediately. The destructor becomes a no-op after this call. |
+| Destructor | Calls `Release()` if the permit has not already been released. |
+
+### Usage
+
+```cpp
+AsyncFlow::TTask<void> UMyComponent::DoWork()
+{
+    // Prefer constructing via AcquireGuarded — see the section below
+    AsyncFlow::FSemaphoreGuard Guard = co_await AsyncFlow::AcquireGuarded(Semaphore);
+    co_await AsyncFlow::Delay(this, 1.0f);
+    DoExpensiveOperation();
+    // Guard releases the permit here, even if the coroutine is cancelled mid-delay
+}
+```
+
+---
+
+## AcquireGuarded
+
+`co_await AcquireGuarded(Semaphore)` acquires one permit and returns an `FSemaphoreGuard` in a single atomic step. This is the recommended pattern for semaphore acquisition in coroutines.
+
+```cpp
+AsyncFlow::TTask<void> UMyComponent::DoWork()
+{
+    AsyncFlow::FSemaphoreGuard Guard = co_await AsyncFlow::AcquireGuarded(Semaphore);
+    // Permit is held — at most MaxCount coroutines are in this section
+    co_await AsyncFlow::Delay(this, 1.0f);
+    DoExpensiveOperation();
+    // Guard destructor releases the permit automatically
+}
+```
+
+For early release before the function returns:
+
+```cpp
+AsyncFlow::TTask<void> UMyComponent::DoWork()
+{
+    AsyncFlow::FSemaphoreGuard Guard = co_await AsyncFlow::AcquireGuarded(Semaphore);
+    DoExpensiveOperation();
+    Guard.Release();    // Release early — remaining work does not need the permit
+    co_await AsyncFlow::Delay(this, 5.0f);
+}
+```
 
 ---
 
@@ -117,11 +179,10 @@ Events and semaphores compose with all other AsyncFlow awaiters:
 ```cpp
 AsyncFlow::TTask<void> UMyComponent::GatedSequence()
 {
-    co_await DataReadyEvent;                  // Wait for external signal
-    co_await Semaphore;                       // Wait for a permit
-    co_await AsyncFlow::Delay(this, 1.0f);    // Game-time delay
+    co_await DataReadyEvent;                                                          // Wait for external signal
+    AsyncFlow::FSemaphoreGuard Guard = co_await AsyncFlow::AcquireGuarded(Semaphore); // Acquire permit (RAII)
+    co_await AsyncFlow::Delay(this, 1.0f);                                            // Game-time delay
     DoWork();
-    Semaphore.Release();
+    // Guard releases the permit when it goes out of scope
 }
 ```
-

@@ -37,6 +37,8 @@
 #include "HAL/PlatformTime.h"
 #include "Misc/OutputDeviceRedirector.h"
 
+#include <atomic>
+
 namespace AsyncFlow
 {
 
@@ -96,7 +98,7 @@ public:
 	/** @return a snapshot copy of all currently tracked coroutines. Thread-safe. */
 	TMap<uint64, FCoroutineDebugInfo> GetActiveCoroutines() const;
 
-	/** @return number of currently tracked coroutines. Thread-safe. */
+	/** @return number of currently tracked coroutines. Lock-free. */
 	int32 GetActiveCount() const;
 
 	/** Log all active coroutines with their names and ages. */
@@ -106,6 +108,7 @@ private:
 	FAsyncFlowDebugger() = default;
 	mutable FCriticalSection CriticalSection;
 	TMap<uint64, FCoroutineDebugInfo> ActiveCoroutines;
+	std::atomic<int32> ActiveCount{0};
 };
 
 // ============================================================================

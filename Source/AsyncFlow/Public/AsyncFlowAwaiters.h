@@ -452,7 +452,7 @@ struct FWhenAllAwaiter
  *          your own OnComplete before passing tasks to WhenAll.
  */
 template <typename... TaskTypes>
-FWhenAllAwaiter WhenAll(TaskTypes&... Tasks)
+[[nodiscard]] FWhenAllAwaiter WhenAll(TaskTypes&... Tasks)
 {
 	constexpr int32 Count = sizeof...(TaskTypes);
 	TSharedPtr<Private::FWhenAllState> State = MakeShared<Private::FWhenAllState>(Count);
@@ -529,7 +529,7 @@ struct FWhenAnyAwaiter
  * @warning Non-winning tasks continue running. Use Race() to auto-cancel losers.
  */
 template <typename... TaskTypes>
-FWhenAnyAwaiter WhenAny(TaskTypes&... Tasks)
+[[nodiscard]] FWhenAnyAwaiter WhenAny(TaskTypes&... Tasks)
 {
 	TSharedPtr<Private::FWhenAnyState> State = MakeShared<Private::FWhenAnyState>();
 
@@ -608,7 +608,7 @@ struct FRaceAwaiter
  * @return       An awaiter — co_await yields the 0-based index of the winner.
  */
 template <typename... TaskTypes>
-FRaceAwaiter Race(TaskTypes&... Tasks)
+[[nodiscard]] FRaceAwaiter Race(TaskTypes&... Tasks)
 {
 	TSharedPtr<Private::FWhenAnyState> State = MakeShared<Private::FWhenAnyState>();
 	TSharedPtr<TArray<TFunction<void()>>> CancelFunctions = MakeShared<TArray<TFunction<void()>>>();
@@ -660,7 +660,7 @@ FRaceAwaiter Race(TaskTypes&... Tasks)
  * @param Tasks  Array of pointers to TTask<void>. Null entries are skipped.
  * @return       An awaiter — use with co_await.
  */
-inline FWhenAllAwaiter WhenAll(TArray<TTask<void>*>& Tasks)
+[[nodiscard]] inline FWhenAllAwaiter WhenAll(TArray<TTask<void>*>& Tasks)
 {
 	const int32 Count = Tasks.Num();
 	TSharedPtr<Private::FWhenAllState> State = MakeShared<Private::FWhenAllState>(Count);
@@ -698,7 +698,7 @@ inline FWhenAllAwaiter WhenAll(TArray<TTask<void>*>& Tasks)
  * @param Tasks  Array of pointers to TTask<void>. Null entries are skipped.
  * @return       An awaiter — co_await yields the 0-based winner index.
  */
-inline FWhenAnyAwaiter WhenAny(TArray<TTask<void>*>& Tasks)
+[[nodiscard]] inline FWhenAnyAwaiter WhenAny(TArray<TTask<void>*>& Tasks)
 {
 	TSharedPtr<Private::FWhenAnyState> State = MakeShared<Private::FWhenAnyState>();
 
@@ -734,7 +734,7 @@ inline FWhenAnyAwaiter WhenAny(TArray<TTask<void>*>& Tasks)
  * @param Tasks  Array of pointers to TTask<void>. Null entries get a no-op cancel function.
  * @return       An awaiter — co_await yields the 0-based winner index.
  */
-inline FRaceAwaiter Race(TArray<TTask<void>*>& Tasks)
+[[nodiscard]] inline FRaceAwaiter Race(TArray<TTask<void>*>& Tasks)
 {
 	TSharedPtr<Private::FWhenAnyState> State = MakeShared<Private::FWhenAnyState>();
 	TSharedPtr<TArray<TFunction<void()>>> CancelFunctions = MakeShared<TArray<TFunction<void()>>>();

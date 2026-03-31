@@ -41,6 +41,10 @@ for (const auto& Pair : Active)
 }
 ```
 
+`GetActiveCount()` is **lock-free** — it reads a `std::atomic<int32>` without acquiring the internal lock. It is safe to call frequently (e.g., every tick) without lock contention.
+
+`GetActiveCoroutines()` acquires the lock and returns a copy of the full tracking map. Use it for diagnostics and logging rather than hot-path checks.
+
 ### Dump to Log
 
 ```cpp
@@ -120,7 +124,8 @@ AsyncFlow::TTask<void> UMySubsystem::LeakWatchdog()
 }
 ```
 
+`GetActiveCount()` is lock-free, so calling it every tick or on a short interval has negligible overhead.
+
 ### Conditional Breakpoints
 
 `FAsyncFlowState` exposes `DebugName` as a public `FString`. Set a conditional breakpoint in `FAsyncFlowState::Cancel()` on `DebugName == TEXT("YourTaskName")` to catch specific cancellations.
-

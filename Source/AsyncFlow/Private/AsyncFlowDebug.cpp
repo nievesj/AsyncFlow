@@ -39,12 +39,16 @@ void FAsyncFlowDebugger::Register(uint64 Id, const FString& DebugName)
 	Info.DebugName = DebugName;
 	Info.CreationTime = FPlatformTime::Seconds();
 	ActiveCoroutines.Add(Id, MoveTemp(Info));
+	ActiveCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void FAsyncFlowDebugger::Unregister(uint64 Id)
 {
 	FScopeLock Lock(&CriticalSection);
-	ActiveCoroutines.Remove(Id);
+	if (ActiveCoroutines.Remove(Id) > 0)
+	{
+		ActiveCount.fetch_sub(1, std::memory_order_relaxed);
+	}
 }
 
 TMap<uint64, FCoroutineDebugInfo> FAsyncFlowDebugger::GetActiveCoroutines() const
@@ -55,8 +59,7 @@ TMap<uint64, FCoroutineDebugInfo> FAsyncFlowDebugger::GetActiveCoroutines() cons
 
 int32 FAsyncFlowDebugger::GetActiveCount() const
 {
-	FScopeLock Lock(&CriticalSection);
-	return ActiveCoroutines.Num();
+	return ActiveCount.load(std::memory_order_relaxed);
 }
 
 void FAsyncFlowDebugger::DumpToLog() const
