@@ -42,31 +42,31 @@
 namespace AsyncFlow
 {
 
-// ============================================================================
-// FCoroutineDebugInfo — per-coroutine tracking data
-// ============================================================================
+	// ============================================================================
+	// FCoroutineDebugInfo — per-coroutine tracking data
+	// ============================================================================
 
-/** Snapshot of a single tracked coroutine's state. */
-struct FCoroutineDebugInfo
-{
-	/** Human-readable label set via TTask::SetDebugName(). */
-	FString DebugName;
+	/** Snapshot of a single tracked coroutine's state. */
+	struct FCoroutineDebugInfo
+	{
+		/** Human-readable label set via TTask::SetDebugName(). */
+		FString DebugName;
 
-	/** Wall-clock time (FPlatformTime::Seconds) when Register() was called. */
-	double CreationTime = 0.0;
+		/** Wall-clock time (FPlatformTime::Seconds) when Register() was called. */
+		double CreationTime = 0.0;
 
-	/** True after the coroutine reaches final_suspend. */
-	bool bCompleted = false;
+		/** True after the coroutine reaches final_suspend. */
+		bool bCompleted = false;
 
-	/** True if Cancel() was called on the coroutine's flow state. */
-	bool bCancelled = false;
-};
+		/** True if Cancel() was called on the coroutine's flow state. */
+		bool bCancelled = false;
+	};
 
-// ============================================================================
-// FAsyncFlowDebugger — global coroutine tracker (opt-in)
-// ============================================================================
+	// ============================================================================
+	// FAsyncFlowDebugger — global coroutine tracker (opt-in)
+	// ============================================================================
 
-/**
+	/**
  * Process-wide singleton that tracks active coroutines for debugging.
  *
  * Thread-safe: all methods lock an internal FCriticalSection.
@@ -74,79 +74,78 @@ struct FCoroutineDebugInfo
  *
  * Console command: "AsyncFlow.List" calls DumpToLog().
  */
-class ASYNCFLOW_API FAsyncFlowDebugger
-{
-public:
-	/** @return the singleton instance. Created on first call. */
-	static FAsyncFlowDebugger& Get();
+	class ASYNCFLOW_API FAsyncFlowDebugger
+	{
+	public:
+		/** @return the singleton instance. Created on first call. */
+		static FAsyncFlowDebugger& Get();
 
-	/**
+		/**
 	 * Register a coroutine for tracking.
 	 *
 	 * @param Id         Unique identifier (typically handle address).
 	 * @param DebugName  Human-readable label for log output.
 	 */
-	void Register(uint64 Id, const FString& DebugName);
+		void Register(uint64 Id, const FString& DebugName);
 
-	/**
+		/**
 	 * Remove a coroutine from tracking.
 	 *
 	 * @param Id  The same ID passed to Register().
 	 */
-	void Unregister(uint64 Id);
+		void Unregister(uint64 Id);
 
-	/** @return a snapshot copy of all currently tracked coroutines. Thread-safe. */
-	TMap<uint64, FCoroutineDebugInfo> GetActiveCoroutines() const;
+		/** @return a snapshot copy of all currently tracked coroutines. Thread-safe. */
+		TMap<uint64, FCoroutineDebugInfo> GetActiveCoroutines() const;
 
-	/** @return number of currently tracked coroutines. Lock-free. */
-	int32 GetActiveCount() const;
+		/** @return number of currently tracked coroutines. Lock-free. */
+		int32 GetActiveCount() const;
 
-	/** Log all active coroutines with their names and ages. */
-	void DumpToLog() const;
+		/** Log all active coroutines with their names and ages. */
+		void DumpToLog() const;
 
-private:
-	FAsyncFlowDebugger() = default;
-	mutable FCriticalSection CriticalSection;
-	TMap<uint64, FCoroutineDebugInfo> ActiveCoroutines;
-	std::atomic<int32> ActiveCount{0};
-};
+	private:
+		FAsyncFlowDebugger() = default;
+		mutable FCriticalSection CriticalSection;
+		TMap<uint64, FCoroutineDebugInfo> ActiveCoroutines;
+		std::atomic<int32> ActiveCount{ 0 };
+	};
 
-// ============================================================================
-// Helper functions for opt-in tracking
-// ============================================================================
+	// ============================================================================
+	// Helper functions for opt-in tracking
+	// ============================================================================
 
-/**
+	/**
  * Register a TTask for debug tracking. Call after SetDebugName().
  * Uses the coroutine handle address as the tracking ID.
  *
  * @tparam T     The task's result type.
  * @param Task   The task to register. Must be valid (IsValid() == true).
  */
-template <typename T>
-void DebugRegisterTask(TTask<T>& Task)
-{
-	if (Task.IsValid())
+	template <typename T>
+	void DebugRegisterTask(TTask<T>& Task)
 	{
-		const uint64 Id = reinterpret_cast<uint64>(Task.GetHandle().address());
-		FAsyncFlowDebugger::Get().Register(Id, Task.GetDebugName());
+		if (Task.IsValid())
+		{
+			const uint64 Id = reinterpret_cast<uint64>(Task.GetHandle().address());
+			FAsyncFlowDebugger::Get().Register(Id, Task.GetDebugName());
+		}
 	}
-}
 
-/**
+	/**
  * Unregister a TTask from debug tracking.
  *
  * @tparam T     The task's result type.
  * @param Task   The task to unregister. Must be valid.
  */
-template <typename T>
-void DebugUnregisterTask(TTask<T>& Task)
-{
-	if (Task.IsValid())
+	template <typename T>
+	void DebugUnregisterTask(TTask<T>& Task)
 	{
-		const uint64 Id = reinterpret_cast<uint64>(Task.GetHandle().address());
-		FAsyncFlowDebugger::Get().Unregister(Id);
+		if (Task.IsValid())
+		{
+			const uint64 Id = reinterpret_cast<uint64>(Task.GetHandle().address());
+			FAsyncFlowDebugger::Get().Unregister(Id);
+		}
 	}
-}
 
 } // namespace AsyncFlow
-

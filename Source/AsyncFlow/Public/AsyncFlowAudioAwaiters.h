@@ -38,133 +38,133 @@
 namespace AsyncFlow
 {
 
-// ============================================================================
-// PlaySoundAndWait — plays an audio component and polls until it finishes
-// ============================================================================
+	// ============================================================================
+	// PlaySoundAndWait — plays an audio component and polls until it finishes
+	// ============================================================================
 
-/**
+	/**
  * Awaiter that calls Play() on a UAudioComponent and polls each tick
  * until IsPlaying() returns false. If the component is null or has no
  * valid world, resumes immediately.
  */
-struct FPlaySoundAwaiter
-{
-	UAudioComponent* AudioComponent = nullptr;
-	std::coroutine_handle<> Continuation;
-	Private::FAwaiterAliveFlag AliveFlag;
-
-	bool await_ready() const { return false; }
-
-	void await_suspend(std::coroutine_handle<> Handle)
+	struct FPlaySoundAwaiter
 	{
-		Continuation = Handle;
+		UAudioComponent* AudioComponent = nullptr;
+		std::coroutine_handle<> Continuation;
+		Private::FAwaiterAliveFlag AliveFlag;
 
-		if (!AudioComponent)
+		bool await_ready() const
 		{
-			Handle.resume();
-			return;
+			return false;
 		}
 
-		AudioComponent->Play();
-
-		UWorld* World = AudioComponent->GetWorld();
-		if (!World)
+		void await_suspend(std::coroutine_handle<> Handle)
 		{
-			Handle.resume();
-			return;
+			Continuation = Handle;
+
+			if (!AudioComponent)
+			{
+				Handle.resume();
+				return;
+			}
+
+			AudioComponent->Play();
+
+			UWorld* World = AudioComponent->GetWorld();
+			if (!World)
+			{
+				Handle.resume();
+				return;
+			}
+
+			UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (!Subsystem)
+			{
+				Handle.resume();
+				return;
+			}
+
+			TWeakObjectPtr<UAudioComponent> WeakAudio = AudioComponent;
+			Subsystem->ScheduleCondition(Handle, AudioComponent, [WeakAudio]() -> bool { return !WeakAudio.IsValid() || !WeakAudio->IsPlaying(); }, AliveFlag.Get());
 		}
 
-		UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
-		if (!Subsystem)
+		void await_resume() const
 		{
-			Handle.resume();
-			return;
 		}
+	};
 
-		TWeakObjectPtr<UAudioComponent> WeakAudio = AudioComponent;
-		Subsystem->ScheduleCondition(Handle, AudioComponent, [WeakAudio]() -> bool
-		{
-			return !WeakAudio.IsValid() || !WeakAudio->IsPlaying();
-		}, AliveFlag.Get());
-	}
-
-	void await_resume() const {}
-};
-
-/**
+	/**
  * Start playing audio and wait until it finishes.
  *
  * @param AudioComponent  The audio component to play. Null resumes immediately.
  * @return                An awaiter — use with co_await. Returns void.
  */
-[[nodiscard]] inline FPlaySoundAwaiter PlaySoundAndWait(UAudioComponent* AudioComponent)
-{
-	return FPlaySoundAwaiter{AudioComponent};
-}
+	[[nodiscard]] inline FPlaySoundAwaiter PlaySoundAndWait(UAudioComponent* AudioComponent)
+	{
+		return FPlaySoundAwaiter{ AudioComponent };
+	}
 
-// ============================================================================
-// WaitForAudioFinished — waits for an already-playing audio component
-// ============================================================================
+	// ============================================================================
+	// WaitForAudioFinished — waits for an already-playing audio component
+	// ============================================================================
 
-/**
+	/**
  * Awaiter that polls until an already-playing UAudioComponent stops.
  * If the component is not playing at the point of co_await, resumes immediately.
  */
-struct FWaitAudioFinishedAwaiter
-{
-	UAudioComponent* AudioComponent = nullptr;
-	std::coroutine_handle<> Continuation;
-	Private::FAwaiterAliveFlag AliveFlag;
-
-	bool await_ready() const
+	struct FWaitAudioFinishedAwaiter
 	{
-		return !AudioComponent || !AudioComponent->IsPlaying();
-	}
+		UAudioComponent* AudioComponent = nullptr;
+		std::coroutine_handle<> Continuation;
+		Private::FAwaiterAliveFlag AliveFlag;
 
-	void await_suspend(std::coroutine_handle<> Handle)
-	{
-		Continuation = Handle;
-
-		if (!AudioComponent || !AudioComponent->IsPlaying())
+		bool await_ready() const
 		{
-			Handle.resume();
-			return;
+			return !AudioComponent || !AudioComponent->IsPlaying();
 		}
 
-		UWorld* World = AudioComponent->GetWorld();
-		if (!World)
+		void await_suspend(std::coroutine_handle<> Handle)
 		{
-			Handle.resume();
-			return;
+			Continuation = Handle;
+
+			if (!AudioComponent || !AudioComponent->IsPlaying())
+			{
+				Handle.resume();
+				return;
+			}
+
+			UWorld* World = AudioComponent->GetWorld();
+			if (!World)
+			{
+				Handle.resume();
+				return;
+			}
+
+			UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (!Subsystem)
+			{
+				Handle.resume();
+				return;
+			}
+
+			TWeakObjectPtr<UAudioComponent> WeakAudio = AudioComponent;
+			Subsystem->ScheduleCondition(Handle, AudioComponent, [WeakAudio]() -> bool { return !WeakAudio.IsValid() || !WeakAudio->IsPlaying(); }, AliveFlag.Get());
 		}
 
-		UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
-		if (!Subsystem)
+		void await_resume() const
 		{
-			Handle.resume();
-			return;
 		}
+	};
 
-		TWeakObjectPtr<UAudioComponent> WeakAudio = AudioComponent;
-		Subsystem->ScheduleCondition(Handle, AudioComponent, [WeakAudio]() -> bool
-		{
-			return !WeakAudio.IsValid() || !WeakAudio->IsPlaying();
-		}, AliveFlag.Get());
-	}
-
-	void await_resume() const {}
-};
-
-/**
+	/**
  * Wait for an already-playing audio component to finish.
  *
  * @param AudioComponent  The audio component to monitor. Null resumes immediately.
  * @return                An awaiter — use with co_await. Returns void.
  */
-[[nodiscard]] inline FWaitAudioFinishedAwaiter WaitForAudioFinished(UAudioComponent* AudioComponent)
-{
-	return FWaitAudioFinishedAwaiter{AudioComponent};
-}
+	[[nodiscard]] inline FWaitAudioFinishedAwaiter WaitForAudioFinished(UAudioComponent* AudioComponent)
+	{
+		return FWaitAudioFinishedAwaiter{ AudioComponent };
+	}
 
 } // namespace AsyncFlow
-

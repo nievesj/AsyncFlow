@@ -69,7 +69,10 @@ namespace AsyncFlow
 		 * @return true if the event is currently in the signaled state.
 		 * co_await on a signaled event returns immediately.
 		 */
-		bool IsSignaled() const { return bSignaled; }
+		bool IsSignaled() const
+		{
+			return bSignaled;
+		}
 
 		/**
 		 * Signal the event. All currently suspended coroutines resume.
@@ -97,10 +100,16 @@ namespace AsyncFlow
 		 * Reset the event to the non-signaled state.
 		 * Future co_awaits will suspend again. Does not affect already-resumed coroutines.
 		 */
-		void Reset() { bSignaled = false; }
+		void Reset()
+		{
+			bSignaled = false;
+		}
 
 		// co_await interface
-		bool await_ready() const { return bSignaled; }
+		bool await_ready() const
+		{
+			return bSignaled;
+		}
 
 		bool await_suspend(std::coroutine_handle<> Handle)
 		{
@@ -113,10 +122,12 @@ namespace AsyncFlow
 			return true;
 		}
 
-		void await_resume() const {}
+		void await_resume() const
+		{
+		}
 
 	private:
-		bool					 bSignaled = false;
+		bool bSignaled = false;
 		mutable FCriticalSection CriticalSection;
 
 		/** Suspended coroutine handles waiting for Signal(). */
@@ -159,7 +170,10 @@ namespace AsyncFlow
 		}
 
 		/** @return the number of currently available permits. */
-		int32 GetAvailable() const { return MaxCount - CurrentCount; }
+		int32 GetAvailable() const
+		{
+			return MaxCount - CurrentCount;
+		}
 
 		/**
 		 * Return one permit. Resumes the oldest waiting coroutine, if any.
@@ -194,7 +208,10 @@ namespace AsyncFlow
 
 		// co_await interface — acquires one permit.
 		// Always enters await_suspend to acquire under the lock atomically.
-		bool await_ready() const { return false; }
+		bool await_ready() const
+		{
+			return false;
+		}
 
 		bool await_suspend(std::coroutine_handle<> Handle)
 		{
@@ -208,11 +225,13 @@ namespace AsyncFlow
 			return true;
 		}
 
-		void await_resume() {}
+		void await_resume()
+		{
+		}
 
 	private:
-		int32					 MaxCount = 1;
-		int32					 CurrentCount = 0;
+		int32 MaxCount = 1;
+		int32 CurrentCount = 0;
 		mutable FCriticalSection CriticalSection;
 
 		/** FIFO queue of coroutines waiting for a permit. */
@@ -262,7 +281,10 @@ namespace AsyncFlow
 		{
 			if (this != &Other)
 			{
-				if (Semaphore) { Semaphore->Release(); }
+				if (Semaphore)
+				{
+					Semaphore->Release();
+				}
 				Semaphore = Other.Semaphore;
 				Other.Semaphore = nullptr;
 			}
@@ -298,7 +320,10 @@ namespace AsyncFlow
 	{
 		FAwaitableSemaphore& Semaphore;
 
-		bool await_ready() const { return false; }
+		bool await_ready() const
+		{
+			return false;
+		}
 
 		bool await_suspend(std::coroutine_handle<> Handle)
 		{
@@ -321,7 +346,7 @@ namespace AsyncFlow
 	 */
 	[[nodiscard]] inline FAcquireGuardedAwaiter AcquireGuarded(FAwaitableSemaphore& Semaphore)
 	{
-		return FAcquireGuardedAwaiter{Semaphore};
+		return FAcquireGuardedAwaiter{ Semaphore };
 	}
 
 } // namespace AsyncFlow

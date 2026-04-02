@@ -101,4 +101,3 @@ private:
 	FGameplayAbilityActorInfo CachedActorInfo;
 	FGameplayAbilityActivationInfo CachedActivationInfo;
 };
-

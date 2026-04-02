@@ -33,15 +33,16 @@
  * Example:
  *   co_verifyf(Ptr != nullptr, TEXT("Ptr was null in %s"), *GetName());
  */
-#define co_verifyf(Expr, Fmt, ...) \
-	do \
-	{ \
-		if (UNLIKELY(!(Expr))) \
-		{ \
+#define co_verifyf(Expr, Fmt, ...)                                                                           \
+	do                                                                                                       \
+	{                                                                                                        \
+		if (UNLIKELY(!(Expr)))                                                                               \
+		{                                                                                                    \
 			UE_LOG(LogAsyncFlow, Warning, TEXT("co_verifyf FAILED: %s | " Fmt), TEXT(#Expr), ##__VA_ARGS__); \
-			co_return; \
-		} \
-	} while (false)
+			co_return;                                                                                       \
+		}                                                                                                    \
+	}                                                                                                        \
+	while (false)
 
 /**
  * co_verifyf_r(Expr, Fmt, ...)
@@ -51,15 +52,16 @@
  * Example:
  *   co_verifyf_r(Count > 0, TEXT("Count was zero")); // returns false, 0, nullptr, etc.
  */
-#define co_verifyf_r(Expr, Fmt, ...) \
-	do \
-	{ \
-		if (UNLIKELY(!(Expr))) \
-		{ \
+#define co_verifyf_r(Expr, Fmt, ...)                                                                           \
+	do                                                                                                         \
+	{                                                                                                          \
+		if (UNLIKELY(!(Expr)))                                                                                 \
+		{                                                                                                      \
 			UE_LOG(LogAsyncFlow, Warning, TEXT("co_verifyf_r FAILED: %s | " Fmt), TEXT(#Expr), ##__VA_ARGS__); \
-			co_return {}; \
-		} \
-	} while (false)
+			co_return {};                                                                                      \
+		}                                                                                                      \
+	}                                                                                                          \
+	while (false)
 
 /**
  * CO_CONTRACT(ConditionLambda)
@@ -72,13 +74,13 @@
  *   TWeakObjectPtr<AActor> WeakOwner = Owner;
  *   CO_CONTRACT([WeakOwner]() { return WeakOwner.IsValid(); });
  */
-#define CO_CONTRACT(ConditionLambda) \
-	do \
-	{ \
+#define CO_CONTRACT(ConditionLambda)                                                                \
+	do                                                                                              \
+	{                                                                                               \
 		AsyncFlow::FAsyncFlowState* FlowState_Contract = AsyncFlow::Private::GetCurrentFlowState(); \
-		if (FlowState_Contract) \
-		{ \
-			FlowState_Contract->ContractChecks.Add(ConditionLambda); \
-		} \
-	} while (false)
-
+		if (FlowState_Contract)                                                                     \
+		{                                                                                           \
+			FlowState_Contract->ContractChecks.Add(ConditionLambda);                                \
+		}                                                                                           \
+	}                                                                                               \
+	while (false)

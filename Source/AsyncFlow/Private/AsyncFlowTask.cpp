@@ -35,38 +35,38 @@
 namespace AsyncFlow::Private
 {
 
-static thread_local FAsyncFlowState* GCurrentFlowState = nullptr;
+	static thread_local FAsyncFlowState* GCurrentFlowState = nullptr;
 
-FAsyncFlowState* GetCurrentFlowState()
-{
-	return GCurrentFlowState;
-}
+	FAsyncFlowState* GetCurrentFlowState()
+	{
+		return GCurrentFlowState;
+	}
 
-void SetCurrentFlowState(FAsyncFlowState* State)
-{
-	GCurrentFlowState = State;
-}
+	void SetCurrentFlowState(FAsyncFlowState* State)
+	{
+		GCurrentFlowState = State;
+	}
 
 } // namespace AsyncFlow::Private
 
 namespace AsyncFlow
 {
 
-FCancellationGuard::FCancellationGuard()
-{
-	State = Private::GetCurrentFlowState();
-	if (State)
+	FCancellationGuard::FCancellationGuard()
 	{
-		State->CancellationGuardDepth.fetch_add(1, std::memory_order_acq_rel);
+		State = Private::GetCurrentFlowState();
+		if (State)
+		{
+			State->CancellationGuardDepth.fetch_add(1, std::memory_order_acq_rel);
+		}
 	}
-}
 
-FCancellationGuard::~FCancellationGuard()
-{
-	if (State)
+	FCancellationGuard::~FCancellationGuard()
 	{
-		State->CancellationGuardDepth.fetch_sub(1, std::memory_order_acq_rel);
+		if (State)
+		{
+			State->CancellationGuardDepth.fetch_sub(1, std::memory_order_acq_rel);
+		}
 	}
-}
 
 } // namespace AsyncFlow

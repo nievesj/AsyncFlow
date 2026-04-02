@@ -41,72 +41,78 @@
 namespace AsyncFlow
 {
 
-// ============================================================================
-// ProcessHttpRequest — sends an HTTP request and waits for the response
-// ============================================================================
+	// ============================================================================
+	// ProcessHttpRequest — sends an HTTP request and waits for the response
+	// ============================================================================
 
-/**
+	/**
  * Awaiter that sends an HTTP request and waits for the response.
  * Binds OnProcessRequestComplete and resumes with {Response, bSuccess}.
  *
  * Destructor invalidates the alive flag — if the response arrives after
  * the awaiter is dead (e.g., coroutine was cancelled), the callback no-ops.
  */
-struct FHttpRequestAwaiter
-{
-	FHttpRequestRef Request;
-	FHttpResponsePtr Response;
-	bool bSuccess = false;
-	std::coroutine_handle<> Continuation;
-	TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
-
-	explicit FHttpRequestAwaiter(FHttpRequestRef InRequest)
-		: Request(MoveTemp(InRequest))
+	struct FHttpRequestAwaiter
 	{
-	}
+		FHttpRequestRef Request;
+		FHttpResponsePtr Response;
+		bool bSuccess = false;
+		std::coroutine_handle<> Continuation;
+		TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
 
-	~FHttpRequestAwaiter() { *AliveFlag = false; }
+		explicit FHttpRequestAwaiter(FHttpRequestRef InRequest)
+			: Request(MoveTemp(InRequest))
+		{
+		}
 
-	bool await_ready() const { return false; }
+		~FHttpRequestAwaiter()
+		{
+			*AliveFlag = false;
+		}
 
-	void await_suspend(std::coroutine_handle<> Handle)
-	{
-		Continuation = Handle;
+		bool await_ready() const
+		{
+			return false;
+		}
 
-		TWeakPtr<bool> WeakAlive = AliveFlag;
-		Request->OnProcessRequestComplete().BindLambda(
-			[this, WeakAlive](FHttpRequestPtr InRequest, FHttpResponsePtr InResponse, bool bConnectedSuccessfully)
-			{
-				if (!WeakAlive.IsValid()) { return; }
-				Response = InResponse;
-				bSuccess = bConnectedSuccessfully;
-				if (Continuation && !Continuation.done())
-				{
-					Continuation.resume();
-				}
-			}
-		);
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			Continuation = Handle;
 
-		Request->ProcessRequest();
-	}
+			TWeakPtr<bool> WeakAlive = AliveFlag;
+			Request->OnProcessRequestComplete().BindLambda(
+				[this, WeakAlive](FHttpRequestPtr InRequest, FHttpResponsePtr InResponse, bool bConnectedSuccessfully) {
+					if (!WeakAlive.IsValid())
+					{
+						return;
+					}
+					Response = InResponse;
+					bSuccess = bConnectedSuccessfully;
+					if (Continuation && !Continuation.done())
+					{
+						Continuation.resume();
+					}
+				});
 
-	TTuple<FHttpResponsePtr, bool> await_resume()
-	{
-		return MakeTuple(MoveTemp(Response), bSuccess);
-	}
-};
+			Request->ProcessRequest();
+		}
 
-/**
+		TTuple<FHttpResponsePtr, bool> await_resume()
+		{
+			return MakeTuple(MoveTemp(Response), bSuccess);
+		}
+	};
+
+	/**
  * Send an HTTP request and co_await the response.
  *
  * @param Request  A configured FHttpRequestRef (verb, URL, headers, body).
  * @return         An awaiter — co_await yields TTuple<FHttpResponsePtr, bool>.
  *                 The bool is true if the connection succeeded.
  */
-[[nodiscard]] inline FHttpRequestAwaiter ProcessHttpRequest(FHttpRequestRef Request)
-{
-	return FHttpRequestAwaiter(MoveTemp(Request));
-}
+	[[nodiscard]] inline FHttpRequestAwaiter ProcessHttpRequest(FHttpRequestRef Request)
+	{
+		return FHttpRequestAwaiter(MoveTemp(Request));
+	}
 
 } // namespace AsyncFlow
-

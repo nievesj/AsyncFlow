@@ -79,10 +79,18 @@ void UAsyncFlowTickSubsystem::Tick(float DeltaTime)
 		double CurrentTime = 0.0;
 		switch (Entry.TimeSource)
 		{
-		case AsyncFlow::Private::EDelayTimeSource::GameTime:    CurrentTime = GameTime; break;
-		case AsyncFlow::Private::EDelayTimeSource::RealTime:    CurrentTime = RealTime; break;
-		case AsyncFlow::Private::EDelayTimeSource::UnpausedTime: CurrentTime = UnpausedTime; break;
-		case AsyncFlow::Private::EDelayTimeSource::AudioTime:   CurrentTime = AudioTime; break;
+			case AsyncFlow::Private::EDelayTimeSource::GameTime:
+				CurrentTime = GameTime;
+				break;
+			case AsyncFlow::Private::EDelayTimeSource::RealTime:
+				CurrentTime = RealTime;
+				break;
+			case AsyncFlow::Private::EDelayTimeSource::UnpausedTime:
+				CurrentTime = UnpausedTime;
+				break;
+			case AsyncFlow::Private::EDelayTimeSource::AudioTime:
+				CurrentTime = AudioTime;
+				break;
 		}
 
 		if (CurrentTime >= Entry.ResumeAtTime)
@@ -213,7 +221,10 @@ TStatId UAsyncFlowTickSubsystem::GetStatId() const
 void UAsyncFlowTickSubsystem::ScheduleDelay(std::coroutine_handle<> Handle, float Seconds, TSharedPtr<bool> InAlive)
 {
 	const UWorld* World = GetWorld();
-	if (!World) { return; }
+	if (!World)
+	{
+		return;
+	}
 
 	AsyncFlow::Private::FDelayedResume Entry;
 	Entry.Handle = Handle;
@@ -236,7 +247,10 @@ void UAsyncFlowTickSubsystem::ScheduleRealDelay(std::coroutine_handle<> Handle, 
 void UAsyncFlowTickSubsystem::ScheduleUnpausedDelay(std::coroutine_handle<> Handle, float Seconds, TSharedPtr<bool> InAlive)
 {
 	const UWorld* World = GetWorld();
-	if (!World) { return; }
+	if (!World)
+	{
+		return;
+	}
 
 	AsyncFlow::Private::FDelayedResume Entry;
 	Entry.Handle = Handle;
@@ -249,7 +263,10 @@ void UAsyncFlowTickSubsystem::ScheduleUnpausedDelay(std::coroutine_handle<> Hand
 void UAsyncFlowTickSubsystem::ScheduleAudioDelay(std::coroutine_handle<> Handle, float Seconds, TSharedPtr<bool> InAlive)
 {
 	const UWorld* World = GetWorld();
-	if (!World) { return; }
+	if (!World)
+	{
+		return;
+	}
 
 	AsyncFlow::Private::FDelayedResume Entry;
 	Entry.Handle = Handle;
@@ -305,4 +322,3 @@ void UAsyncFlowTickSubsystem::CancelHandle(std::coroutine_handle<> Handle)
 	ConditionResumes.RemoveAll([Handle](const AsyncFlow::Private::FConditionResume& E) { return E.Handle == Handle; });
 	TickUpdates.RemoveAll([Handle](const AsyncFlow::Private::FTickUpdate& E) { return E.Handle == Handle; });
 }
-

@@ -38,69 +38,80 @@
 namespace AsyncFlow
 {
 
-// ============================================================================
-// PlayMontageAndWait — start a montage, suspend until it completes
-// ============================================================================
+	// ============================================================================
+	// PlayMontageAndWait — start a montage, suspend until it completes
+	// ============================================================================
 
-/**
+	/**
  * Awaiter that plays a montage on a UAnimInstance and waits for completion.
  * Binds to both OnMontageEnded and OnMontageBlendingOut delegate pairs.
  * Returns true if the montage completed normally, false if interrupted.
  *
  * If AnimInstance or Montage is null, resumes immediately with false.
  */
-struct FPlayMontageAndWaitAwaiter
-{
-	UAnimInstance* AnimInstance = nullptr;
-	UAnimMontage* Montage = nullptr;
-	float PlayRate = 1.0f;
-	FName StartSection = NAME_None;
-	bool bCompleted = false;
-	std::coroutine_handle<> Continuation;
-	TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
-
-	~FPlayMontageAndWaitAwaiter() { *AliveFlag = false; }
-
-	bool await_ready() const { return false; }
-
-	void await_suspend(std::coroutine_handle<> Handle)
+	struct FPlayMontageAndWaitAwaiter
 	{
-		Continuation = Handle;
+		UAnimInstance* AnimInstance = nullptr;
+		UAnimMontage* Montage = nullptr;
+		float PlayRate = 1.0f;
+		FName StartSection = NAME_None;
+		bool bCompleted = false;
+		std::coroutine_handle<> Continuation;
+		TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
 
-		if (!AnimInstance || !Montage)
+		~FPlayMontageAndWaitAwaiter()
 		{
-			bCompleted = false;
-			Handle.resume();
-			return;
+			*AliveFlag = false;
 		}
 
-		FOnMontageEnded EndedDelegate;
-		TWeakPtr<bool> WeakAlive = AliveFlag;
-		EndedDelegate.BindLambda([this, WeakAlive](UAnimMontage* InMontage, bool bInterrupted)
+		bool await_ready() const
 		{
-			if (!WeakAlive.IsValid()) { return; }
-			bCompleted = !bInterrupted;
-			if (Continuation && !Continuation.done())
+			return false;
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			Continuation = Handle;
+
+			if (!AnimInstance || !Montage)
 			{
-				Continuation.resume();
+				bCompleted = false;
+				Handle.resume();
+				return;
 			}
-		});
 
-		AnimInstance->Montage_Play(Montage, PlayRate);
+			FOnMontageEnded EndedDelegate;
+			TWeakPtr<bool> WeakAlive = AliveFlag;
+			EndedDelegate.BindLambda([this, WeakAlive](UAnimMontage* InMontage, bool bInterrupted) {
+				if (!WeakAlive.IsValid())
+				{
+					return;
+				}
+				bCompleted = !bInterrupted;
+				if (Continuation && !Continuation.done())
+				{
+					Continuation.resume();
+				}
+			});
 
-		if (StartSection != NAME_None)
-		{
-			AnimInstance->Montage_JumpToSection(StartSection, Montage);
+			AnimInstance->Montage_Play(Montage, PlayRate);
+
+			if (StartSection != NAME_None)
+			{
+				AnimInstance->Montage_JumpToSection(StartSection, Montage);
+			}
+
+			AnimInstance->Montage_SetEndDelegate(EndedDelegate, Montage);
 		}
 
-		AnimInstance->Montage_SetEndDelegate(EndedDelegate, Montage);
-	}
+		/** Returns true if the montage completed normally, false if interrupted. */
+		bool await_resume() const
+		{
+			return bCompleted;
+		}
+	};
 
-	/** Returns true if the montage completed normally, false if interrupted. */
-	bool await_resume() const { return bCompleted; }
-};
-
-/**
+	/**
  * Play a montage and wait for it to finish.
  *
  * @param AnimInstance   The animation instance to play on.
@@ -109,84 +120,86 @@ struct FPlayMontageAndWaitAwaiter
  * @param StartSection   Named section to start from. NAME_None starts from the beginning.
  * @return               An awaiter — co_await yields bool (true = completed, false = interrupted).
  */
-[[nodiscard]] inline FPlayMontageAndWaitAwaiter PlayMontageAndWait(
-	UAnimInstance* AnimInstance,
-	UAnimMontage* Montage,
-	float PlayRate = 1.0f,
-	FName StartSection = NAME_None)
-{
-	return FPlayMontageAndWaitAwaiter{AnimInstance, Montage, PlayRate, StartSection};
-}
+	[[nodiscard]] inline FPlayMontageAndWaitAwaiter PlayMontageAndWait(
+		UAnimInstance* AnimInstance,
+		UAnimMontage* Montage,
+		float PlayRate = 1.0f,
+		FName StartSection = NAME_None)
+	{
+		return FPlayMontageAndWaitAwaiter{ AnimInstance, Montage, PlayRate, StartSection };
+	}
 
-// ============================================================================
-// WaitForMontageEnded — wait for an already-playing montage to finish
-// ============================================================================
+	// ============================================================================
+	// WaitForMontageEnded — wait for an already-playing montage to finish
+	// ============================================================================
 
-/**
+	/**
  * Awaiter that waits for a specific montage to finish on a UAnimInstance.
  * Does NOT start playback — the montage must already be playing.
  * If no matching montage is active, resumes immediately.
  */
-struct FWaitForMontageEndedAwaiter
-{
-	UAnimInstance* AnimInstance = nullptr;
-	UAnimMontage* Montage = nullptr;
-	std::coroutine_handle<> Continuation;
-	Private::FAwaiterAliveFlag AliveFlag;
-
-	bool await_ready() const { return false; }
-
-	void await_suspend(std::coroutine_handle<> Handle)
+	struct FWaitForMontageEndedAwaiter
 	{
-		Continuation = Handle;
+		UAnimInstance* AnimInstance = nullptr;
+		UAnimMontage* Montage = nullptr;
+		std::coroutine_handle<> Continuation;
+		Private::FAwaiterAliveFlag AliveFlag;
 
-		if (!AnimInstance || !Montage)
+		bool await_ready() const
 		{
-			Handle.resume();
-			return;
+			return false;
 		}
 
-		UWorld* World = AnimInstance->GetWorld();
-		if (!World)
+		void await_suspend(std::coroutine_handle<> Handle)
 		{
-			Handle.resume();
-			return;
-		}
+			Continuation = Handle;
 
-		UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
-		if (!Subsystem)
-		{
-			Handle.resume();
-			return;
-		}
+			if (!AnimInstance || !Montage)
+			{
+				Handle.resume();
+				return;
+			}
 
-		TWeakObjectPtr<UAnimInstance> WeakAnim = AnimInstance;
-		TWeakObjectPtr<UAnimMontage> WeakMontage = Montage;
+			UWorld* World = AnimInstance->GetWorld();
+			if (!World)
+			{
+				Handle.resume();
+				return;
+			}
 
-		Subsystem->ScheduleCondition(Handle, AnimInstance, [WeakAnim, WeakMontage]() -> bool
-		{
+			UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (!Subsystem)
+			{
+				Handle.resume();
+				return;
+			}
+
+			TWeakObjectPtr<UAnimInstance> WeakAnim = AnimInstance;
+			TWeakObjectPtr<UAnimMontage> WeakMontage = Montage;
+
+			Subsystem->ScheduleCondition(Handle, AnimInstance, [WeakAnim, WeakMontage]() -> bool {
 			if (!WeakAnim.IsValid() || !WeakMontage.IsValid())
 			{
 				return true;
 			}
-			return !WeakAnim->Montage_IsPlaying(WeakMontage.Get());
-		}, AliveFlag.Get());
-	}
+			return !WeakAnim->Montage_IsPlaying(WeakMontage.Get()); }, AliveFlag.Get());
+		}
 
-	void await_resume() const {}
-};
+		void await_resume() const
+		{
+		}
+	};
 
-/**
+	/**
  * Wait for an already-playing montage to finish.
  *
  * @param AnimInstance  The animation instance.
  * @param Montage       The montage to wait on. Must already be playing.
  * @return              An awaiter — co_await yields bool (true = completed normally, false = interrupted).
  */
-[[nodiscard]] inline FWaitForMontageEndedAwaiter WaitForMontageEnded(UAnimInstance* AnimInstance, UAnimMontage* Montage)
-{
-	return FWaitForMontageEndedAwaiter{AnimInstance, Montage};
-}
+	[[nodiscard]] inline FWaitForMontageEndedAwaiter WaitForMontageEnded(UAnimInstance* AnimInstance, UAnimMontage* Montage)
+	{
+		return FWaitForMontageEndedAwaiter{ AnimInstance, Montage };
+	}
 
 } // namespace AsyncFlow
-
