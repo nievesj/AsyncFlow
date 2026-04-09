@@ -25,92 +25,98 @@
 // Wraps ALevelSequenceActor playback as a co_awaitable. PlaySequenceAndWait
 // plays a sequence from a level sequence actor and suspends until it finishes.
 //
-// Guarded with __has_include — if MovieScene/LevelSequence modules are not
-// present, this header compiles to nothing.
+// Guarded with __has_include — if the LevelSequence module is not present,
+// this header compiles to nothing.
 #pragma once
 
-#include "AsyncFlowTask.h"
-#include "AsyncFlowTickSubsystem.h"
-#include "AsyncFlowAwaiters.h"
-#include "MovieSceneSequencePlayer.h"
-#include "Engine/World.h"
+#if __has_include("LevelSequenceActor.h")
 
-#include <coroutine>
+	#include "AsyncFlowTask.h"
+	#include "AsyncFlowTickSubsystem.h"
+	#include "AsyncFlowAwaiters.h"
+	#include "LevelSequenceActor.h"
+	#include "MovieSceneSequencePlayer.h"
+	#include "Engine/World.h"
+
+	#include <coroutine>
 
 namespace AsyncFlow
 {
 
-/**
+	/**
  * Awaiter that plays a ULevelSequence via ALevelSequenceActor and waits
  * for it to finish. Binds to the sequence player's OnFinished delegate.
  *
  * If the actor or its sequence player is null, resumes immediately.
  *
- * @note Requires MovieScene and LevelSequence modules. This header
- *       is a no-op if those modules are unavailable.
+ * @note Requires the LevelSequence module. This header is a no-op if
+ *       LevelSequenceActor.h is unavailable.
  */
-struct FPlaySequenceAndWaitAwaiter
-{
-	UMovieSceneSequencePlayer* Player = nullptr;
-	std::coroutine_handle<> Continuation;
-	Private::FAwaiterAliveFlag AliveFlag;
-
-	FPlaySequenceAndWaitAwaiter() = default;
-	FPlaySequenceAndWaitAwaiter(FPlaySequenceAndWaitAwaiter&&) noexcept = default;
-	FPlaySequenceAndWaitAwaiter& operator=(FPlaySequenceAndWaitAwaiter&&) noexcept = default;
-	FPlaySequenceAndWaitAwaiter(const FPlaySequenceAndWaitAwaiter&) = delete;
-	FPlaySequenceAndWaitAwaiter& operator=(const FPlaySequenceAndWaitAwaiter&) = delete;
-
-	bool await_ready() const { return false; }
-
-	void await_suspend(std::coroutine_handle<> Handle)
+	struct FPlaySequenceAndWaitAwaiter
 	{
-		Continuation = Handle;
+		UMovieSceneSequencePlayer* Player = nullptr;
+		std::coroutine_handle<> Continuation;
+		Private::FAwaiterAliveFlag AliveFlag;
 
-		if (!Player)
+		FPlaySequenceAndWaitAwaiter() = default;
+		FPlaySequenceAndWaitAwaiter(FPlaySequenceAndWaitAwaiter&&) noexcept = default;
+		FPlaySequenceAndWaitAwaiter& operator=(FPlaySequenceAndWaitAwaiter&&) noexcept = default;
+		FPlaySequenceAndWaitAwaiter(const FPlaySequenceAndWaitAwaiter&) = delete;
+		FPlaySequenceAndWaitAwaiter& operator=(const FPlaySequenceAndWaitAwaiter&) = delete;
+
+		bool await_ready() const
 		{
-			Handle.resume();
-			return;
+			return false;
 		}
 
-		Player->Play();
-
-		UWorld* World = Player->GetWorld();
-		if (!World)
+		void await_suspend(std::coroutine_handle<> Handle)
 		{
-			Handle.resume();
-			return;
+			Continuation = Handle;
+
+			if (!Player)
+			{
+				Handle.resume();
+				return;
+			}
+
+			Player->Play();
+
+			UWorld* World = Player->GetWorld();
+			if (!World)
+			{
+				Handle.resume();
+				return;
+			}
+
+			UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (!Subsystem)
+			{
+				Handle.resume();
+				return;
+			}
+
+			TWeakObjectPtr<UMovieSceneSequencePlayer> WeakPlayer = Player;
+			Subsystem->ScheduleCondition(Handle, Player, [WeakPlayer]() -> bool { return !WeakPlayer.IsValid() || !WeakPlayer->IsPlaying(); }, AliveFlag.Get());
 		}
 
-		UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
-		if (!Subsystem)
+		void await_resume() const
 		{
-			Handle.resume();
-			return;
 		}
+	};
 
-		TWeakObjectPtr<UMovieSceneSequencePlayer> WeakPlayer = Player;
-		Subsystem->ScheduleCondition(Handle, Player, [WeakPlayer]() -> bool
-		{
-			return !WeakPlayer.IsValid() || !WeakPlayer->IsPlaying();
-		}, AliveFlag.Get());
-	}
-
-	void await_resume() const {}
-};
-
-/**
+	/**
  * Play a level sequence and wait for it to finish.
  *
  * @param SequenceActor  The ALevelSequenceActor placed in the level.
  * @return               An awaiter — use with co_await. Returns void.
  */
-[[nodiscard]] inline FPlaySequenceAndWaitAwaiter PlaySequenceAndWait(ALevelSequenceActor* SequenceActor)
-{
-	FPlaySequenceAndWaitAwaiter Aw;
-	Aw.Player = SequenceActor ? SequenceActor->GetSequencePlayer() : nullptr;
-	return Aw;
-}
+	[[nodiscard]] inline FPlaySequenceAndWaitAwaiter PlaySequenceAndWait(ALevelSequenceActor* SequenceActor)
+	{
+		FPlaySequenceAndWaitAwaiter Aw;
+		Aw.Player = SequenceActor ? SequenceActor->GetSequencePlayer() : nullptr;
+		return Aw;
+	}
 
 } // namespace AsyncFlow
 
+#endif // __has_include("LevelSequenceActor.h")

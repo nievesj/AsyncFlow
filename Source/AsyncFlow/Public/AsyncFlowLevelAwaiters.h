@@ -40,78 +40,80 @@
 namespace AsyncFlow
 {
 
-namespace Private
-{
+	namespace Private
+	{
 
-/**
+		/**
  * Returns a unique int32 each call, used as FLatentActionInfo::UUID
  * so concurrent latent actions never collide.
  */
-inline int32 GenerateLatentUUID()
-{
-	static std::atomic<int32> Counter{1000000};
-	return Counter.fetch_add(1, std::memory_order_relaxed);
-}
+		inline int32 GenerateLatentUUID()
+		{
+			static std::atomic<int32> Counter{ 1000000 };
+			return Counter.fetch_add(1, std::memory_order_relaxed);
+		}
 
-} // namespace Private
+	} // namespace Private
 
-// ============================================================================
-// LoadStreamLevel — async level streaming load
-// ============================================================================
+	// ============================================================================
+	// LoadStreamLevel — async level streaming load
+	// ============================================================================
 
-/**
+	/**
  * Awaiter that loads a streaming level by name. Wraps
  * UGameplayStatics::LoadStreamLevelBySoftObjectPtr via the latent action
  * bridge. Resumes when the level is fully loaded and visible.
  *
  * If WorldContext is null, resumes immediately (no level loads).
  */
-struct FLoadStreamLevelAwaiter
-{
-	UObject* WorldContext;
-	FName LevelName;
-	bool bMakeVisibleAfterLoad;
-	TSharedPtr<bool> SharedSuccess = MakeShared<bool>(false);
-	std::coroutine_handle<> Continuation;
-	Private::FAwaiterAliveFlag AliveFlag;
-
-	bool await_ready() const { return false; }
-
-	void await_suspend(std::coroutine_handle<> Handle)
+	struct FLoadStreamLevelAwaiter
 	{
-		Continuation = Handle;
+		UObject* WorldContext;
+		FName LevelName;
+		bool bMakeVisibleAfterLoad;
+		TSharedPtr<bool> SharedSuccess = MakeShared<bool>(false);
+		std::coroutine_handle<> Continuation;
+		Private::FAwaiterAliveFlag AliveFlag;
 
-		if (!WorldContext)
+		bool await_ready() const
 		{
-			Handle.resume();
-			return;
+			return false;
 		}
 
-		UWorld* World = WorldContext->GetWorld();
-		if (!World)
+		void await_suspend(std::coroutine_handle<> Handle)
 		{
-			Handle.resume();
-			return;
-		}
+			Continuation = Handle;
 
-		FLatentActionInfo LatentInfo;
-		LatentInfo.UUID = Private::GenerateLatentUUID();
-		LatentInfo.CallbackTarget = nullptr;
+			if (!WorldContext)
+			{
+				Handle.resume();
+				return;
+			}
 
-		UGameplayStatics::LoadStreamLevel(WorldContext, LevelName, bMakeVisibleAfterLoad, false, LatentInfo);
+			UWorld* World = WorldContext->GetWorld();
+			if (!World)
+			{
+				Handle.resume();
+				return;
+			}
 
-		UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
-		if (!Subsystem)
-		{
-			Handle.resume();
-			return;
-		}
+			FLatentActionInfo LatentInfo;
+			LatentInfo.UUID = Private::GenerateLatentUUID();
+			LatentInfo.CallbackTarget = nullptr;
 
-		const bool bNeedVisible = bMakeVisibleAfterLoad;
-		TSharedPtr<bool> Success = SharedSuccess;
-		TWeakObjectPtr<UObject> WeakContext = WorldContext;
-		Subsystem->ScheduleCondition(Handle, WorldContext, [WeakContext, LevelName = LevelName, bNeedVisible, Success]() -> bool
-		{
+			UGameplayStatics::LoadStreamLevel(WorldContext, LevelName, bMakeVisibleAfterLoad, false, LatentInfo);
+
+			UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (!Subsystem)
+			{
+				Handle.resume();
+				return;
+			}
+
+			const bool bNeedVisible = bMakeVisibleAfterLoad;
+			TSharedPtr<bool> Success = SharedSuccess;
+			TWeakObjectPtr<UObject> WeakContext = WorldContext;
+			Subsystem->ScheduleCondition(Handle, WorldContext, [WeakContext, LevelName = LevelName, bNeedVisible, Success]() -> bool {
 			if (!WeakContext.IsValid()) { return false; }
 			ULevelStreaming* StreamingLevel = UGameplayStatics::GetStreamingLevel(WeakContext.Get(), LevelName);
 			if (!StreamingLevel)
@@ -127,14 +129,16 @@ struct FLoadStreamLevelAwaiter
 				*Success = true;
 				return true;
 			}
-			return false;
-		}, AliveFlag.Get());
-	}
+			return false; }, AliveFlag.Get());
+		}
 
-	bool await_resume() const { return *SharedSuccess; }
-};
+		bool await_resume() const
+		{
+			return *SharedSuccess;
+		}
+	};
 
-/**
+	/**
  * Load a streaming level and wait for it to become visible.
  *
  * @param WorldContext   Any UObject with a valid GetWorld().
@@ -142,63 +146,65 @@ struct FLoadStreamLevelAwaiter
  * @param bMakeVisible  Whether to make the level visible after loading.
  * @return              An awaiter — use with co_await. Returns true on success.
  */
-[[nodiscard]] inline FLoadStreamLevelAwaiter LoadStreamLevel(UObject* WorldContext, FName LevelName, bool bMakeVisible = true)
-{
-	return FLoadStreamLevelAwaiter{WorldContext, LevelName, bMakeVisible};
-}
+	[[nodiscard]] inline FLoadStreamLevelAwaiter LoadStreamLevel(UObject* WorldContext, FName LevelName, bool bMakeVisible = true)
+	{
+		return FLoadStreamLevelAwaiter{ WorldContext, LevelName, bMakeVisible };
+	}
 
-// ============================================================================
-// UnloadStreamLevel — async level streaming unload
-// ============================================================================
+	// ============================================================================
+	// UnloadStreamLevel — async level streaming unload
+	// ============================================================================
 
-/**
+	/**
  * Awaiter that unloads a streaming level. Resumes when the level is
  * fully unloaded.
  */
-struct FUnloadStreamLevelAwaiter
-{
-	UObject* WorldContext;
-	FName LevelName;
-	TSharedPtr<bool> SharedSuccess = MakeShared<bool>(false);
-	std::coroutine_handle<> Continuation;
-	Private::FAwaiterAliveFlag AliveFlag;
-
-	bool await_ready() const { return false; }
-
-	void await_suspend(std::coroutine_handle<> Handle)
+	struct FUnloadStreamLevelAwaiter
 	{
-		Continuation = Handle;
+		UObject* WorldContext;
+		FName LevelName;
+		TSharedPtr<bool> SharedSuccess = MakeShared<bool>(false);
+		std::coroutine_handle<> Continuation;
+		Private::FAwaiterAliveFlag AliveFlag;
 
-		if (!WorldContext)
+		bool await_ready() const
 		{
-			Handle.resume();
-			return;
+			return false;
 		}
 
-		UWorld* World = WorldContext->GetWorld();
-		if (!World)
+		void await_suspend(std::coroutine_handle<> Handle)
 		{
-			Handle.resume();
-			return;
-		}
+			Continuation = Handle;
 
-		FLatentActionInfo LatentInfo;
-		LatentInfo.UUID = Private::GenerateLatentUUID();
-		LatentInfo.CallbackTarget = nullptr;
+			if (!WorldContext)
+			{
+				Handle.resume();
+				return;
+			}
 
-		UGameplayStatics::UnloadStreamLevel(WorldContext, LevelName, LatentInfo, false);
+			UWorld* World = WorldContext->GetWorld();
+			if (!World)
+			{
+				Handle.resume();
+				return;
+			}
 
-		UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
-		if (!Subsystem)
-		{
-			Handle.resume();
-			return;
-		}
+			FLatentActionInfo LatentInfo;
+			LatentInfo.UUID = Private::GenerateLatentUUID();
+			LatentInfo.CallbackTarget = nullptr;
 
-		TSharedPtr<bool> Success = SharedSuccess;
-		TWeakObjectPtr<UObject> WeakContext = WorldContext;
-		Subsystem->ScheduleCondition(Handle, WorldContext, [WeakContext, LevelName = LevelName, Success]() -> bool
-		{
+			UGameplayStatics::UnloadStreamLevel(WorldContext, LevelName, LatentInfo, false);
+
+			UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (!Subsystem)
+			{
+				Handle.resume();
+				return;
+			}
+
+			TSharedPtr<bool> Success = SharedSuccess;
+			TWeakObjectPtr<UObject> WeakContext = WorldContext;
+			Subsystem->ScheduleCondition(Handle, WorldContext, [WeakContext, LevelName = LevelName, Success]() -> bool {
 			if (!WeakContext.IsValid()) { return false; }
 			ULevelStreaming* StreamingLevel = UGameplayStatics::GetStreamingLevel(WeakContext.Get(), LevelName);
 			if (!StreamingLevel || !StreamingLevel->IsLevelLoaded())
@@ -206,26 +212,28 @@ struct FUnloadStreamLevelAwaiter
 				*Success = true;
 				return true;
 			}
-			return false;
-		}, AliveFlag.Get());
-	}
+			return false; }, AliveFlag.Get());
+		}
 
-	bool await_resume() const { return *SharedSuccess; }
-};
+		bool await_resume() const
+		{
+			return *SharedSuccess;
+		}
+	};
 
-/**
+	/**
  * Unload a streaming level and wait for it to complete.
  *
  * @param WorldContext  Any UObject with a valid GetWorld().
  * @param LevelName    The streaming level name.
- * @return             An awaiter — use with co_await. Returns void.
+ * @return             An awaiter — use with co_await. Returns true on success.
  */
-[[nodiscard]] inline FUnloadStreamLevelAwaiter UnloadStreamLevel(UObject* WorldContext, FName LevelName)
-{
-	return FUnloadStreamLevelAwaiter{WorldContext, LevelName};
-}
+	[[nodiscard]] inline FUnloadStreamLevelAwaiter UnloadStreamLevel(UObject* WorldContext, FName LevelName)
+	{
+		return FUnloadStreamLevelAwaiter{ WorldContext, LevelName };
+	}
 
-/**
+	/**
  * Open a level by name. Wraps UGameplayStatics::OpenLevel.
  *
  * @warning This triggers a full map transition. The coroutine will not
@@ -236,15 +244,20 @@ struct FUnloadStreamLevelAwaiter
  * @param bAbsolute     True for absolute URL, false for relative.
  * @param Options       Optional URL options string.
  */
-inline void OpenLevel(UObject* WorldContext, const FString& LevelName, bool bAbsolute = true, const FString& Options = FString())
-{
-	if (!WorldContext) { return; }
+	inline void OpenLevel(UObject* WorldContext, const FString& LevelName, bool bAbsolute = true, const FString& Options = FString())
+	{
+		if (!WorldContext)
+		{
+			return;
+		}
 
-	UWorld* World = WorldContext->GetWorld();
-	if (!World) { return; }
+		UWorld* World = WorldContext->GetWorld();
+		if (!World)
+		{
+			return;
+		}
 
-	UGameplayStatics::OpenLevel(WorldContext, FName(*LevelName), bAbsolute, Options);
-}
+		UGameplayStatics::OpenLevel(WorldContext, FName(*LevelName), bAbsolute, Options);
+	}
 
 } // namespace AsyncFlow
-

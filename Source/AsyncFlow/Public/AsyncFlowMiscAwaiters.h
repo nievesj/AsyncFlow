@@ -40,28 +40,28 @@
 
 // Conditional includes for optional module dependencies
 #if __has_include("NiagaraComponent.h")
-#include "NiagaraComponent.h"
-#define ASYNCFLOW_HAS_NIAGARA 1
+	#include "NiagaraComponent.h"
+	#define ASYNCFLOW_HAS_NIAGARA 1
 #else
-#define ASYNCFLOW_HAS_NIAGARA 0
+	#define ASYNCFLOW_HAS_NIAGARA 0
 #endif
 
 #if __has_include("Blueprint/UserWidget.h")
-#include "Blueprint/UserWidget.h"
-#include "Animation/WidgetAnimation.h"
-#define ASYNCFLOW_HAS_UMG 1
+	#include "Blueprint/UserWidget.h"
+	#include "Animation/WidgetAnimation.h"
+	#define ASYNCFLOW_HAS_UMG 1
 #else
-#define ASYNCFLOW_HAS_UMG 0
+	#define ASYNCFLOW_HAS_UMG 0
 #endif
 
 namespace AsyncFlow
 {
 
-// ============================================================================
-// Timeline — interpolates a float over time with a per-tick callback
-// ============================================================================
+	// ============================================================================
+	// Timeline — interpolates a float over time with a per-tick callback
+	// ============================================================================
 
-/**
+	/**
  * Awaiter that interpolates a float from Start to End over Duration seconds,
  * calling UpdateFunc each tick with the current interpolated value.
  * Resumes the coroutine when Duration elapses.
@@ -70,67 +70,68 @@ namespace AsyncFlow
  * may overshoot Duration by one frame's DeltaTime — the final callback
  * clamps Alpha to 1.0.
  */
-struct FTimelineAwaiter
-{
-	UObject* WorldContext = nullptr;
-	float From = 0.0f;
-	float To = 1.0f;
-	float Duration = 1.0f;
-	TFunction<void(float)> UpdateCallback;
-	Private::FAwaiterAliveFlag AliveFlag;
-
-	FTimelineAwaiter() = default;
-	FTimelineAwaiter(FTimelineAwaiter&&) noexcept = default;
-	FTimelineAwaiter& operator=(FTimelineAwaiter&&) noexcept = default;
-	FTimelineAwaiter(const FTimelineAwaiter&) = delete;
-	FTimelineAwaiter& operator=(const FTimelineAwaiter&) = delete;
-
-	bool await_ready() const { return Duration <= 0.0f; }
-
-	void await_suspend(std::coroutine_handle<> Handle)
+	struct FTimelineAwaiter
 	{
-		if (!WorldContext || Duration <= 0.0f)
+		UObject* WorldContext = nullptr;
+		float From = 0.0f;
+		float To = 1.0f;
+		float Duration = 1.0f;
+		TFunction<void(float)> UpdateCallback;
+		Private::FAwaiterAliveFlag AliveFlag;
+
+		FTimelineAwaiter() = default;
+		FTimelineAwaiter(FTimelineAwaiter&&) noexcept = default;
+		FTimelineAwaiter& operator=(FTimelineAwaiter&&) noexcept = default;
+		FTimelineAwaiter(const FTimelineAwaiter&) = delete;
+		FTimelineAwaiter& operator=(const FTimelineAwaiter&) = delete;
+
+		bool await_ready() const
 		{
-			if (UpdateCallback)
+			return Duration <= 0.0f;
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			if (!WorldContext || Duration <= 0.0f)
 			{
-				UpdateCallback(To);
+				if (UpdateCallback)
+				{
+					UpdateCallback(To);
+				}
+				Handle.resume();
+				return;
 			}
-			Handle.resume();
-			return;
-		}
 
-		UWorld* World = WorldContext->GetWorld();
-		if (!World)
-		{
-			Handle.resume();
-			return;
-		}
-
-		UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
-		if (!Subsystem)
-		{
-			Handle.resume();
-			return;
-		}
-
-		struct FState
-		{
-			float From;
-			float To;
-			float Duration;
-			float Elapsed = 0.0f;
-			TFunction<void(float)> Callback;
-		};
-
-		TSharedPtr<FState> State = MakeShared<FState>();
-		State->From = From;
-		State->To = To;
-		State->Duration = Duration;
-		State->Callback = UpdateCallback;
-
-		Subsystem->ScheduleTickUpdate(Handle,
-			[State](float DeltaTime) -> bool
+			UWorld* World = WorldContext->GetWorld();
+			if (!World)
 			{
+				Handle.resume();
+				return;
+			}
+
+			UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (!Subsystem)
+			{
+				Handle.resume();
+				return;
+			}
+
+			struct FState
+			{
+				float From;
+				float To;
+				float Duration;
+				float Elapsed = 0.0f;
+				TFunction<void(float)> Callback;
+			};
+
+			TSharedPtr<FState> State = MakeShared<FState>();
+			State->From = From;
+			State->To = To;
+			State->Duration = Duration;
+			State->Callback = UpdateCallback;
+
+			Subsystem->ScheduleTickUpdate(Handle, [State](float DeltaTime) -> bool {
 				State->Elapsed += DeltaTime;
 				const float Alpha = FMath::Clamp(State->Elapsed / State->Duration, 0.0f, 1.0f);
 				const float Value = FMath::Lerp(State->From, State->To, Alpha);
@@ -140,16 +141,15 @@ struct FTimelineAwaiter
 					State->Callback(Value);
 				}
 
-				return Alpha >= 1.0f;
-			},
-			AliveFlag.Get()
-		);
-	}
+				return Alpha >= 1.0f; }, AliveFlag.Get());
+		}
 
-	void await_resume() const {}
-};
+		void await_resume() const
+		{
+		}
+	};
 
-/**
+	/**
  * Interpolate a float value from Start to End over Duration seconds.
  *
  * @param WorldContext    Any UObject with a valid GetWorld().
@@ -159,96 +159,97 @@ struct FTimelineAwaiter
  * @param UpdateCallback  Called each tick with the current interpolated value.
  * @return                An awaiter — use with co_await. Returns void.
  */
-[[nodiscard]] inline FTimelineAwaiter Timeline(UObject* WorldContext, float From, float To, float Duration, TFunction<void(float)> UpdateCallback)
-{
-	FTimelineAwaiter Aw;
-	Aw.WorldContext = WorldContext;
-	Aw.From = From;
-	Aw.To = To;
-	Aw.Duration = Duration;
-	Aw.UpdateCallback = MoveTemp(UpdateCallback);
-	return Aw;
-}
+	[[nodiscard]] inline FTimelineAwaiter Timeline(UObject* WorldContext, float From, float To, float Duration, TFunction<void(float)> UpdateCallback)
+	{
+		FTimelineAwaiter Aw;
+		Aw.WorldContext = WorldContext;
+		Aw.From = From;
+		Aw.To = To;
+		Aw.Duration = Duration;
+		Aw.UpdateCallback = MoveTemp(UpdateCallback);
+		return Aw;
+	}
 
-// ============================================================================
-// MoveComponentTo — smoothly move a scene component to a target transform
-// ============================================================================
+	// ============================================================================
+	// MoveComponentTo — smoothly move a scene component to a target transform
+	// ============================================================================
 
-/**
+	/**
  * Awaiter that interpolates a USceneComponent's transform from its current
  * position/rotation to a target over Duration seconds. Applies both
  * location and rotation interpolation per tick.
  */
-struct FMoveComponentToAwaiter
-{
-	USceneComponent* Component = nullptr;
-	FVector TargetLocation;
-	FRotator TargetRotation;
-	float Duration = 1.0f;
-	bool bEaseIn = true;
-	bool bEaseOut = true;
-	Private::FAwaiterAliveFlag AliveFlag;
-
-	FMoveComponentToAwaiter() = default;
-	FMoveComponentToAwaiter(FMoveComponentToAwaiter&&) noexcept = default;
-	FMoveComponentToAwaiter& operator=(FMoveComponentToAwaiter&&) noexcept = default;
-	FMoveComponentToAwaiter(const FMoveComponentToAwaiter&) = delete;
-	FMoveComponentToAwaiter& operator=(const FMoveComponentToAwaiter&) = delete;
-
-	bool await_ready() const { return Duration <= 0.0f || !Component; }
-
-	void await_suspend(std::coroutine_handle<> Handle)
+	struct FMoveComponentToAwaiter
 	{
-		if (!Component || Duration <= 0.0f)
+		USceneComponent* Component = nullptr;
+		FVector TargetLocation;
+		FRotator TargetRotation;
+		float Duration = 1.0f;
+		bool bEaseIn = true;
+		bool bEaseOut = true;
+		Private::FAwaiterAliveFlag AliveFlag;
+
+		FMoveComponentToAwaiter() = default;
+		FMoveComponentToAwaiter(FMoveComponentToAwaiter&&) noexcept = default;
+		FMoveComponentToAwaiter& operator=(FMoveComponentToAwaiter&&) noexcept = default;
+		FMoveComponentToAwaiter(const FMoveComponentToAwaiter&) = delete;
+		FMoveComponentToAwaiter& operator=(const FMoveComponentToAwaiter&) = delete;
+
+		bool await_ready() const
 		{
-			if (Component)
+			return Duration <= 0.0f || !Component;
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			if (!Component || Duration <= 0.0f)
 			{
-				Component->SetWorldLocationAndRotation(TargetLocation, TargetRotation);
+				if (Component)
+				{
+					Component->SetWorldLocationAndRotation(TargetLocation, TargetRotation);
+				}
+				Handle.resume();
+				return;
 			}
-			Handle.resume();
-			return;
-		}
 
-		UWorld* World = Component->GetWorld();
-		if (!World)
-		{
-			Handle.resume();
-			return;
-		}
-
-		UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
-		if (!Subsystem)
-		{
-			Handle.resume();
-			return;
-		}
-
-		struct FState
-		{
-			TWeakObjectPtr<USceneComponent> Comp;
-			FVector StartLoc;
-			FQuat StartQuat;
-			FVector EndLoc;
-			FQuat EndQuat;
-			float Duration;
-			float Elapsed = 0.0f;
-			bool bEaseIn;
-			bool bEaseOut;
-		};
-
-		TSharedPtr<FState> State = MakeShared<FState>();
-		State->Comp = Component;
-		State->StartLoc = Component->GetComponentLocation();
-		State->StartQuat = Component->GetComponentQuat();
-		State->EndLoc = TargetLocation;
-		State->EndQuat = TargetRotation.Quaternion();
-		State->Duration = Duration;
-		State->bEaseIn = bEaseIn;
-		State->bEaseOut = bEaseOut;
-
-		Subsystem->ScheduleTickUpdate(Handle,
-			[State](float DeltaTime) -> bool
+			UWorld* World = Component->GetWorld();
+			if (!World)
 			{
+				Handle.resume();
+				return;
+			}
+
+			UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (!Subsystem)
+			{
+				Handle.resume();
+				return;
+			}
+
+			struct FState
+			{
+				TWeakObjectPtr<USceneComponent> Comp;
+				FVector StartLoc;
+				FQuat StartQuat;
+				FVector EndLoc;
+				FQuat EndQuat;
+				float Duration;
+				float Elapsed = 0.0f;
+				bool bEaseIn;
+				bool bEaseOut;
+			};
+
+			TSharedPtr<FState> State = MakeShared<FState>();
+			State->Comp = Component;
+			State->StartLoc = Component->GetComponentLocation();
+			State->StartQuat = Component->GetComponentQuat();
+			State->EndLoc = TargetLocation;
+			State->EndQuat = TargetRotation.Quaternion();
+			State->Duration = Duration;
+			State->bEaseIn = bEaseIn;
+			State->bEaseOut = bEaseOut;
+
+			Subsystem->ScheduleTickUpdate(Handle, [State](float DeltaTime) -> bool {
 				if (!State->Comp.IsValid())
 				{
 					return true;
@@ -274,16 +275,15 @@ struct FMoveComponentToAwaiter
 				const FQuat Rot = FQuat::Slerp(State->StartQuat, State->EndQuat, Alpha);
 				State->Comp->SetWorldLocationAndRotation(Loc, Rot);
 
-				return Alpha >= 1.0f;
-			},
-			AliveFlag.Get()
-		);
-	}
+				return Alpha >= 1.0f; }, AliveFlag.Get());
+		}
 
-	void await_resume() const {}
-};
+		void await_resume() const
+		{
+		}
+	};
 
-/**
+	/**
  * Smoothly move a scene component to a target transform over time.
  *
  * @param Component        The component to move.
@@ -294,321 +294,335 @@ struct FMoveComponentToAwaiter
  * @param bEaseOut         Apply ease-out curve.
  * @return                 An awaiter — use with co_await. Returns void.
  */
-[[nodiscard]] inline FMoveComponentToAwaiter MoveComponentTo(
-	USceneComponent* Component,
-	const FVector& TargetLocation,
-	const FRotator& TargetRotation,
-	float Duration = 1.0f,
-	bool bEaseIn = true,
-	bool bEaseOut = true)
-{
-	FMoveComponentToAwaiter Aw;
-	Aw.Component = Component;
-	Aw.TargetLocation = TargetLocation;
-	Aw.TargetRotation = TargetRotation;
-	Aw.Duration = Duration;
-	Aw.bEaseIn = bEaseIn;
-	Aw.bEaseOut = bEaseOut;
-	return Aw;
-}
+	[[nodiscard]] inline FMoveComponentToAwaiter MoveComponentTo(
+		USceneComponent* Component,
+		const FVector& TargetLocation,
+		const FRotator& TargetRotation,
+		float Duration = 1.0f,
+		bool bEaseIn = true,
+		bool bEaseOut = true)
+	{
+		FMoveComponentToAwaiter Aw;
+		Aw.Component = Component;
+		Aw.TargetLocation = TargetLocation;
+		Aw.TargetRotation = TargetRotation;
+		Aw.Duration = Duration;
+		Aw.bEaseIn = bEaseIn;
+		Aw.bEaseOut = bEaseOut;
+		return Aw;
+	}
 
-// ============================================================================
-// WaitForNiagaraComplete — waits for a Niagara particle system to finish
-// ============================================================================
+	// ============================================================================
+	// WaitForNiagaraComplete — waits for a Niagara particle system to finish
+	// ============================================================================
 
 #if ASYNCFLOW_HAS_NIAGARA
 
-struct FWaitNiagaraCompleteAwaiter
-{
-	UNiagaraComponent* NiagaraComponent = nullptr;
-	std::coroutine_handle<> Continuation;
-	Private::FAwaiterAliveFlag AliveFlag;
-
-	FWaitNiagaraCompleteAwaiter() = default;
-	FWaitNiagaraCompleteAwaiter(FWaitNiagaraCompleteAwaiter&&) noexcept = default;
-	FWaitNiagaraCompleteAwaiter& operator=(FWaitNiagaraCompleteAwaiter&&) noexcept = default;
-	FWaitNiagaraCompleteAwaiter(const FWaitNiagaraCompleteAwaiter&) = delete;
-	FWaitNiagaraCompleteAwaiter& operator=(const FWaitNiagaraCompleteAwaiter&) = delete;
-
-	bool await_ready() const
+	struct FWaitNiagaraCompleteAwaiter
 	{
-		return !NiagaraComponent || !NiagaraComponent->IsActive();
-	}
+		UNiagaraComponent* NiagaraComponent = nullptr;
+		std::coroutine_handle<> Continuation;
+		Private::FAwaiterAliveFlag AliveFlag;
 
-	void await_suspend(std::coroutine_handle<> Handle)
+		FWaitNiagaraCompleteAwaiter() = default;
+		FWaitNiagaraCompleteAwaiter(FWaitNiagaraCompleteAwaiter&&) noexcept = default;
+		FWaitNiagaraCompleteAwaiter& operator=(FWaitNiagaraCompleteAwaiter&&) noexcept = default;
+		FWaitNiagaraCompleteAwaiter(const FWaitNiagaraCompleteAwaiter&) = delete;
+		FWaitNiagaraCompleteAwaiter& operator=(const FWaitNiagaraCompleteAwaiter&) = delete;
+
+		bool await_ready() const
+		{
+			return !NiagaraComponent || !NiagaraComponent->IsActive();
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			Continuation = Handle;
+
+			if (!NiagaraComponent || !NiagaraComponent->IsActive())
+			{
+				Handle.resume();
+				return;
+			}
+
+			UWorld* World = NiagaraComponent->GetWorld();
+			if (!World)
+			{
+				Handle.resume();
+				return;
+			}
+
+			UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (!Subsystem)
+			{
+				Handle.resume();
+				return;
+			}
+
+			TWeakObjectPtr<UNiagaraComponent> WeakComp = NiagaraComponent;
+			Subsystem->ScheduleCondition(Handle, NiagaraComponent, [WeakComp]() -> bool { return !WeakComp.IsValid() || !WeakComp->IsActive(); }, AliveFlag.Get());
+		}
+
+		void await_resume() const
+		{
+		}
+	};
+
+	/** Wait for a Niagara particle system to finish. */
+	[[nodiscard]] inline FWaitNiagaraCompleteAwaiter WaitForNiagaraComplete(UNiagaraComponent* NiagaraComponent)
 	{
-		Continuation = Handle;
-
-		if (!NiagaraComponent || !NiagaraComponent->IsActive())
-		{
-			Handle.resume();
-			return;
-		}
-
-		UWorld* World = NiagaraComponent->GetWorld();
-		if (!World)
-		{
-			Handle.resume();
-			return;
-		}
-
-		UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
-		if (!Subsystem)
-		{
-			Handle.resume();
-			return;
-		}
-
-		TWeakObjectPtr<UNiagaraComponent> WeakComp = NiagaraComponent;
-		Subsystem->ScheduleCondition(Handle, NiagaraComponent, [WeakComp]() -> bool
-		{
-			return !WeakComp.IsValid() || !WeakComp->IsActive();
-		}, AliveFlag.Get());
+		FWaitNiagaraCompleteAwaiter Aw;
+		Aw.NiagaraComponent = NiagaraComponent;
+		return Aw;
 	}
-
-	void await_resume() const {}
-};
-
-/** Wait for a Niagara particle system to finish. */
-[[nodiscard]] inline FWaitNiagaraCompleteAwaiter WaitForNiagaraComplete(UNiagaraComponent* NiagaraComponent)
-{
-	FWaitNiagaraCompleteAwaiter Aw;
-	Aw.NiagaraComponent = NiagaraComponent;
-	return Aw;
-}
 
 #endif // ASYNCFLOW_HAS_NIAGARA
 
-// ============================================================================
-// PlayWidgetAnimationAndWait — plays a UMG widget animation and waits for completion
-// ============================================================================
+	// ============================================================================
+	// PlayWidgetAnimationAndWait — plays a UMG widget animation and waits for completion
+	// ============================================================================
 
 #if ASYNCFLOW_HAS_UMG
 
-struct FPlayWidgetAnimationAndWaitAwaiter
-{
-	UUserWidget* Widget = nullptr;
-	UWidgetAnimation* Animation = nullptr;
-	std::coroutine_handle<> Continuation;
-	Private::FAwaiterAliveFlag AliveFlag;
-
-	FPlayWidgetAnimationAndWaitAwaiter() = default;
-	FPlayWidgetAnimationAndWaitAwaiter(FPlayWidgetAnimationAndWaitAwaiter&&) noexcept = default;
-	FPlayWidgetAnimationAndWaitAwaiter& operator=(FPlayWidgetAnimationAndWaitAwaiter&&) noexcept = default;
-	FPlayWidgetAnimationAndWaitAwaiter(const FPlayWidgetAnimationAndWaitAwaiter&) = delete;
-	FPlayWidgetAnimationAndWaitAwaiter& operator=(const FPlayWidgetAnimationAndWaitAwaiter&) = delete;
-
-	bool await_ready() const
+	struct FPlayWidgetAnimationAndWaitAwaiter
 	{
-		return !Widget || !Animation;
-	}
+		UUserWidget* Widget = nullptr;
+		UWidgetAnimation* Animation = nullptr;
+		std::coroutine_handle<> Continuation;
+		Private::FAwaiterAliveFlag AliveFlag;
 
-	void await_suspend(std::coroutine_handle<> Handle)
+		FPlayWidgetAnimationAndWaitAwaiter() = default;
+		FPlayWidgetAnimationAndWaitAwaiter(FPlayWidgetAnimationAndWaitAwaiter&&) noexcept = default;
+		FPlayWidgetAnimationAndWaitAwaiter& operator=(FPlayWidgetAnimationAndWaitAwaiter&&) noexcept = default;
+		FPlayWidgetAnimationAndWaitAwaiter(const FPlayWidgetAnimationAndWaitAwaiter&) = delete;
+		FPlayWidgetAnimationAndWaitAwaiter& operator=(const FPlayWidgetAnimationAndWaitAwaiter&) = delete;
+
+		bool await_ready() const
+		{
+			return !Widget || !Animation;
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			Continuation = Handle;
+
+			if (!Widget || !Animation)
+			{
+				Handle.resume();
+				return;
+			}
+
+			Widget->PlayAnimation(Animation);
+
+			UWorld* World = Widget->GetWorld();
+			if (!World)
+			{
+				Handle.resume();
+				return;
+			}
+
+			UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (!Subsystem)
+			{
+				Handle.resume();
+				return;
+			}
+
+			TWeakObjectPtr<UUserWidget> WeakWidget = Widget;
+			TWeakObjectPtr<UWidgetAnimation> WeakAnim = Animation;
+			Subsystem->ScheduleCondition(Handle, Widget, [WeakWidget, WeakAnim]() -> bool { return !WeakWidget.IsValid() || !WeakAnim.IsValid() || !WeakWidget->IsAnimationPlaying(WeakAnim.Get()); }, AliveFlag.Get());
+		}
+
+		void await_resume() const
+		{
+		}
+	};
+
+	/** Play a widget animation and wait for it to finish. */
+	[[nodiscard]] inline FPlayWidgetAnimationAndWaitAwaiter PlayWidgetAnimationAndWait(UUserWidget* Widget, UWidgetAnimation* Animation)
 	{
-		Continuation = Handle;
-
-		if (!Widget || !Animation)
-		{
-			Handle.resume();
-			return;
-		}
-
-		Widget->PlayAnimation(Animation);
-
-		UWorld* World = Widget->GetWorld();
-		if (!World)
-		{
-			Handle.resume();
-			return;
-		}
-
-		UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
-		if (!Subsystem)
-		{
-			Handle.resume();
-			return;
-		}
-
-		TWeakObjectPtr<UUserWidget> WeakWidget = Widget;
-		TWeakObjectPtr<UWidgetAnimation> WeakAnim = Animation;
-		Subsystem->ScheduleCondition(Handle, Widget, [WeakWidget, WeakAnim]() -> bool
-		{
-			return !WeakWidget.IsValid() || !WeakAnim.IsValid() || !WeakWidget->IsAnimationPlaying(WeakAnim.Get());
-		}, AliveFlag.Get());
+		FPlayWidgetAnimationAndWaitAwaiter Aw;
+		Aw.Widget = Widget;
+		Aw.Animation = Animation;
+		return Aw;
 	}
-
-	void await_resume() const {}
-};
-
-/** Play a widget animation and wait for it to finish. */
-[[nodiscard]] inline FPlayWidgetAnimationAndWaitAwaiter PlayWidgetAnimationAndWait(UUserWidget* Widget, UWidgetAnimation* Animation)
-{
-	FPlayWidgetAnimationAndWaitAwaiter Aw;
-	Aw.Widget = Widget;
-	Aw.Animation = Animation;
-	return Aw;
-}
 
 #endif // ASYNCFLOW_HAS_UMG
 
-// ============================================================================
-// Timeline time variants — Unpaused, Real, Audio timelines
-// ============================================================================
+	// ============================================================================
+	// Timeline time variants — Unpaused, Real, Audio timelines
+	// ============================================================================
 
-/**
+	/**
  * Timeline that accumulates real (wall-clock) time instead of game time.
  * Useful for UI animations that should run during pause.
  */
-struct FRealTimelineAwaiter
-{
-	UObject* WorldContext = nullptr;
-	float From = 0.0f;
-	float To = 1.0f;
-	float Duration = 1.0f;
-	TFunction<void(float)> UpdateCallback;
-	Private::FAwaiterAliveFlag AliveFlag;
-
-	FRealTimelineAwaiter() = default;
-	FRealTimelineAwaiter(FRealTimelineAwaiter&&) noexcept = default;
-	FRealTimelineAwaiter& operator=(FRealTimelineAwaiter&&) noexcept = default;
-	FRealTimelineAwaiter(const FRealTimelineAwaiter&) = delete;
-	FRealTimelineAwaiter& operator=(const FRealTimelineAwaiter&) = delete;
-
-	bool await_ready() const { return Duration <= 0.0f; }
-
-	void await_suspend(std::coroutine_handle<> Handle)
+	struct FRealTimelineAwaiter
 	{
-		if (!WorldContext || Duration <= 0.0f)
+		UObject* WorldContext = nullptr;
+		float From = 0.0f;
+		float To = 1.0f;
+		float Duration = 1.0f;
+		TFunction<void(float)> UpdateCallback;
+		Private::FAwaiterAliveFlag AliveFlag;
+
+		FRealTimelineAwaiter() = default;
+		FRealTimelineAwaiter(FRealTimelineAwaiter&&) noexcept = default;
+		FRealTimelineAwaiter& operator=(FRealTimelineAwaiter&&) noexcept = default;
+		FRealTimelineAwaiter(const FRealTimelineAwaiter&) = delete;
+		FRealTimelineAwaiter& operator=(const FRealTimelineAwaiter&) = delete;
+
+		bool await_ready() const
 		{
-			if (UpdateCallback) { UpdateCallback(To); }
-			Handle.resume();
-			return;
+			return Duration <= 0.0f;
 		}
 
-		UWorld* World = WorldContext->GetWorld();
-		if (!World) { Handle.resume(); return; }
-
-		UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
-		if (!Subsystem) { Handle.resume(); return; }
-
-		struct FState
+		void await_suspend(std::coroutine_handle<> Handle)
 		{
-			float From, To, Duration;
-			double StartRealTime;
-			TFunction<void(float)> Callback;
-		};
-
-		TSharedPtr<FState> State = MakeShared<FState>();
-		State->From = From;
-		State->To = To;
-		State->Duration = Duration;
-		State->StartRealTime = FPlatformTime::Seconds();
-		State->Callback = UpdateCallback;
-
-		Subsystem->ScheduleTickUpdate(Handle,
-			[State](float) -> bool
+			if (!WorldContext || Duration <= 0.0f)
 			{
+				if (UpdateCallback)
+				{
+					UpdateCallback(To);
+				}
+				Handle.resume();
+				return;
+			}
+
+			UWorld* World = WorldContext->GetWorld();
+			if (!World)
+			{
+				Handle.resume();
+				return;
+			}
+
+			UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (!Subsystem)
+			{
+				Handle.resume();
+				return;
+			}
+
+			struct FState
+			{
+				float From, To, Duration;
+				double StartRealTime;
+				TFunction<void(float)> Callback;
+			};
+
+			TSharedPtr<FState> State = MakeShared<FState>();
+			State->From = From;
+			State->To = To;
+			State->Duration = Duration;
+			State->StartRealTime = FPlatformTime::Seconds();
+			State->Callback = UpdateCallback;
+
+			Subsystem->ScheduleTickUpdate(Handle, [State](float) -> bool {
 				const double Elapsed = FPlatformTime::Seconds() - State->StartRealTime;
 				const float Alpha = FMath::Clamp(static_cast<float>(Elapsed) / State->Duration, 0.0f, 1.0f);
 				const float Value = FMath::Lerp(State->From, State->To, Alpha);
 				if (State->Callback) { State->Callback(Value); }
-				return Alpha >= 1.0f;
-			},
-			AliveFlag.Get()
-		);
+				return Alpha >= 1.0f; }, AliveFlag.Get());
+		}
+
+		void await_resume() const
+		{
+		}
+	};
+
+	[[nodiscard]] inline FRealTimelineAwaiter RealTimeline(UObject* WorldContext, float From, float To, float Duration, TFunction<void(float)> UpdateCallback)
+	{
+		FRealTimelineAwaiter Aw;
+		Aw.WorldContext = WorldContext;
+		Aw.From = From;
+		Aw.To = To;
+		Aw.Duration = Duration;
+		Aw.UpdateCallback = MoveTemp(UpdateCallback);
+		return Aw;
 	}
 
-	void await_resume() const {}
-};
+	/** Convenience alias — UnpausedTimeline uses real time (continues during pause). */
+	[[nodiscard]] inline FRealTimelineAwaiter UnpausedTimeline(UObject* WorldContext, float From, float To, float Duration, TFunction<void(float)> UpdateCallback)
+	{
+		return RealTimeline(WorldContext, From, To, Duration, MoveTemp(UpdateCallback));
+	}
 
-[[nodiscard]] inline FRealTimelineAwaiter RealTimeline(UObject* WorldContext, float From, float To, float Duration, TFunction<void(float)> UpdateCallback)
-{
-	FRealTimelineAwaiter Aw;
-	Aw.WorldContext = WorldContext;
-	Aw.From = From;
-	Aw.To = To;
-	Aw.Duration = Duration;
-	Aw.UpdateCallback = MoveTemp(UpdateCallback);
-	return Aw;
-}
+	/** AudioTimeline — uses real time as a proxy (audio time is not exposed per-tick easily). */
+	[[nodiscard]] inline FRealTimelineAwaiter AudioTimeline(UObject* WorldContext, float From, float To, float Duration, TFunction<void(float)> UpdateCallback)
+	{
+		return RealTimeline(WorldContext, From, To, Duration, MoveTemp(UpdateCallback));
+	}
 
-/** Convenience alias — UnpausedTimeline uses real time (continues during pause). */
-[[nodiscard]] inline FRealTimelineAwaiter UnpausedTimeline(UObject* WorldContext, float From, float To, float Duration, TFunction<void(float)> UpdateCallback)
-{
-	return RealTimeline(WorldContext, From, To, Duration, MoveTemp(UpdateCallback));
-}
+	// ============================================================================
+	// WaitForEndOfFrame — suspends until the end of the current frame
+	// ============================================================================
 
-/** AudioTimeline — uses real time as a proxy (audio time is not exposed per-tick easily). */
-[[nodiscard]] inline FRealTimelineAwaiter AudioTimeline(UObject* WorldContext, float From, float To, float Duration, TFunction<void(float)> UpdateCallback)
-{
-	return RealTimeline(WorldContext, From, To, Duration, MoveTemp(UpdateCallback));
-}
-
-// ============================================================================
-// WaitForEndOfFrame — suspends until the end of the current frame
-// ============================================================================
-
-/**
+	/**
  * Awaiter that waits for the world's end-of-frame delegate.
  * The engine fires FWorldDelegates::OnWorldPostActorTick at the end of the
  * actor-tick phase. The coroutine resumes in that callback.
  *
  * If no world is available, falls back to a 1-tick delay.
  */
-struct FWaitForEndOfFrameAwaiter
-{
-	UObject* WorldContext = nullptr;
-	Private::FAwaiterAliveFlag AliveFlag;
-
-	FWaitForEndOfFrameAwaiter() = default;
-	FWaitForEndOfFrameAwaiter(FWaitForEndOfFrameAwaiter&&) noexcept = default;
-	FWaitForEndOfFrameAwaiter& operator=(FWaitForEndOfFrameAwaiter&&) noexcept = default;
-	FWaitForEndOfFrameAwaiter(const FWaitForEndOfFrameAwaiter&) = delete;
-	FWaitForEndOfFrameAwaiter& operator=(const FWaitForEndOfFrameAwaiter&) = delete;
-
-	bool await_ready() const { return false; } // Never ready, always suspend
-
-	void await_suspend(std::coroutine_handle<> Handle)
+	struct FWaitForEndOfFrameAwaiter
 	{
-		if (!WorldContext || !WorldContext->GetWorld())
+		UObject* WorldContext = nullptr;
+		Private::FAwaiterAliveFlag AliveFlag;
+
+		FWaitForEndOfFrameAwaiter() = default;
+		FWaitForEndOfFrameAwaiter(FWaitForEndOfFrameAwaiter&&) noexcept = default;
+		FWaitForEndOfFrameAwaiter& operator=(FWaitForEndOfFrameAwaiter&&) noexcept = default;
+		FWaitForEndOfFrameAwaiter(const FWaitForEndOfFrameAwaiter&) = delete;
+		FWaitForEndOfFrameAwaiter& operator=(const FWaitForEndOfFrameAwaiter&) = delete;
+
+		bool await_ready() const
 		{
-			Handle.resume();
-			return;
+			return false;
+		} // Never ready, always suspend
+
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			if (!WorldContext || !WorldContext->GetWorld())
+			{
+				Handle.resume();
+				return;
+			}
+
+			UWorld* World = WorldContext->GetWorld();
+			UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (!Subsystem)
+			{
+				Handle.resume();
+				return;
+			}
+
+			// Schedule for next tick — closest approximation to end-of-frame
+			Subsystem->ScheduleTicks(Handle, 1, AliveFlag.Get());
 		}
 
-		UWorld* World = WorldContext->GetWorld();
-		UAsyncFlowTickSubsystem* Subsystem = World->GetSubsystem<UAsyncFlowTickSubsystem>();
-		if (!Subsystem)
+		void await_resume() const
 		{
-			Handle.resume();
-			return;
 		}
+	};
 
-		// Schedule for next tick — closest approximation to end-of-frame
-		Subsystem->ScheduleTicks(Handle, 1, AliveFlag.Get());
-	}
-
-	void await_resume() const {}
-};
-
-/**
+	/**
  * Suspend until the end of the current frame.
  *
  * @param WorldContext  Any UObject with a valid GetWorld().
  * @return             An awaiter — use with co_await. Returns void.
  */
-[[nodiscard]] inline FWaitForEndOfFrameAwaiter WaitForEndOfFrame(UObject* WorldContext)
-{
-	FWaitForEndOfFrameAwaiter Aw;
-	Aw.WorldContext = WorldContext;
-	return Aw;
-}
+	[[nodiscard]] inline FWaitForEndOfFrameAwaiter WaitForEndOfFrame(UObject* WorldContext)
+	{
+		FWaitForEndOfFrameAwaiter Aw;
+		Aw.WorldContext = WorldContext;
+		return Aw;
+	}
 
-// ============================================================================
-// TimerAwaiter — wraps FTimerManager::SetTimer
-// ============================================================================
+	// ============================================================================
+	// TimerAwaiter — wraps FTimerManager::SetTimer
+	// ============================================================================
 
-/**
+	/**
  * Awaiter that wraps FTimerManager::SetTimer. The coroutine suspends until
  * the timer fires. Supports one-shot timers only (not looping).
  * If the world or timer manager is unavailable, resumes immediately.
@@ -617,66 +631,69 @@ struct FWaitForEndOfFrameAwaiter
  *       the tick subsystem. Useful when you need timer handle control
  *       (e.g., querying time remaining).
  */
-struct FTimerAwaiter
-{
-	UObject* WorldContext = nullptr;
-	FTimerHandle TimerHandle;
-	float Seconds = 0.0f;
-	Private::FAwaiterAliveFlag AliveFlag;
-
-	FTimerAwaiter() = default;
-	FTimerAwaiter(FTimerAwaiter&&) noexcept = default;
-	FTimerAwaiter& operator=(FTimerAwaiter&&) noexcept = default;
-	FTimerAwaiter(const FTimerAwaiter&) = delete;
-	FTimerAwaiter& operator=(const FTimerAwaiter&) = delete;
-
-	bool await_ready() const { return Seconds <= 0.0f; }
-
-	void await_suspend(std::coroutine_handle<> Handle)
+	struct FTimerAwaiter
 	{
-		if (!WorldContext || Seconds <= 0.0f)
+		UObject* WorldContext = nullptr;
+		FTimerHandle TimerHandle;
+		float Seconds = 0.0f;
+		Private::FAwaiterAliveFlag AliveFlag;
+
+		FTimerAwaiter() = default;
+		FTimerAwaiter(FTimerAwaiter&&) noexcept = default;
+		FTimerAwaiter& operator=(FTimerAwaiter&&) noexcept = default;
+		FTimerAwaiter(const FTimerAwaiter&) = delete;
+		FTimerAwaiter& operator=(const FTimerAwaiter&) = delete;
+
+		bool await_ready() const
 		{
-			Handle.resume();
-			return;
+			return Seconds <= 0.0f;
 		}
 
-		UWorld* World = WorldContext->GetWorld();
-		if (!World)
+		void await_suspend(std::coroutine_handle<> Handle)
 		{
-			Handle.resume();
-			return;
-		}
-
-		TSharedPtr<bool> Alive = AliveFlag.Get();
-		FTimerManager& TimerManager = World->GetTimerManager();
-		TimerManager.SetTimer(TimerHandle, FTimerDelegate::CreateLambda(
-			[Handle, Alive]()
+			if (!WorldContext || Seconds <= 0.0f)
 			{
+				Handle.resume();
+				return;
+			}
+
+			UWorld* World = WorldContext->GetWorld();
+			if (!World)
+			{
+				Handle.resume();
+				return;
+			}
+
+			TSharedPtr<bool> Alive = AliveFlag.Get();
+			FTimerManager& TimerManager = World->GetTimerManager();
+			TimerManager.SetTimer(TimerHandle, FTimerDelegate::CreateLambda([Handle, Alive]() {
 				if (*Alive)
 				{
 					Handle.resume();
 				}
-			}
-		), Seconds, false);
-	}
+			}),
+				Seconds,
+				false);
+		}
 
-	void await_resume() const {}
-};
+		void await_resume() const
+		{
+		}
+	};
 
-/**
+	/**
  * Set a timer and co_await it.
  *
  * @param WorldContext  Any UObject with a valid GetWorld().
  * @param Seconds       Delay in seconds before the timer fires.
  * @return              An awaiter — use with co_await. Returns void.
  */
-[[nodiscard]] inline FTimerAwaiter SetTimerAndWait(UObject* WorldContext, float Seconds)
-{
-	FTimerAwaiter Aw;
-	Aw.WorldContext = WorldContext;
-	Aw.Seconds = Seconds;
-	return Aw;
-}
+	[[nodiscard]] inline FTimerAwaiter SetTimerAndWait(UObject* WorldContext, float Seconds)
+	{
+		FTimerAwaiter Aw;
+		Aw.WorldContext = WorldContext;
+		Aw.Seconds = Seconds;
+		return Aw;
+	}
 
 } // namespace AsyncFlow
-

@@ -76,8 +76,7 @@ void UAsyncFlowGameplayAbility::ActivateAbility(
 	ActiveTask = ExecuteAbility(MoveTemp(Params));
 
 	// Register completion callback
-	ActiveTask.OnComplete([this]()
-	{
+	ActiveTask.OnComplete([this]() {
 		OnCoroutineCompleted();
 	});
 
@@ -144,8 +143,7 @@ void UAsyncFlowGameplayAbility::OnCoroutineCompleted()
 	const EAbilitySuccessType Result = ActiveTask.GetResult();
 	const bool bWasCancelled = (Result == EAbilitySuccessType::Canceled);
 
-	UE_LOG(LogAsyncFlow, Verbose, TEXT("AsyncFlowAbility [%s] completed with result: %d"),
-		*GetName(), static_cast<int32>(Result));
+	UE_LOG(LogAsyncFlow, Verbose, TEXT("AsyncFlowAbility [%s] completed with result: %d"), *GetName(), static_cast<int32>(Result));
 
 	if (IsActive())
 	{

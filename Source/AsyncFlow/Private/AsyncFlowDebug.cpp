@@ -26,58 +26,58 @@
 namespace AsyncFlow
 {
 
-FAsyncFlowDebugger& FAsyncFlowDebugger::Get()
-{
-	static FAsyncFlowDebugger Instance;
-	return Instance;
-}
-
-void FAsyncFlowDebugger::Register(uint64 Id, const FString& DebugName)
-{
-	FScopeLock Lock(&CriticalSection);
-	FCoroutineDebugInfo Info;
-	Info.DebugName = DebugName;
-	Info.CreationTime = FPlatformTime::Seconds();
-	ActiveCoroutines.Add(Id, MoveTemp(Info));
-	ActiveCount.fetch_add(1, std::memory_order_relaxed);
-}
-
-void FAsyncFlowDebugger::Unregister(uint64 Id)
-{
-	FScopeLock Lock(&CriticalSection);
-	if (ActiveCoroutines.Remove(Id) > 0)
+	FAsyncFlowDebugger& FAsyncFlowDebugger::Get()
 	{
-		ActiveCount.fetch_sub(1, std::memory_order_relaxed);
+		static FAsyncFlowDebugger Instance;
+		return Instance;
 	}
-}
 
-TMap<uint64, FCoroutineDebugInfo> FAsyncFlowDebugger::GetActiveCoroutines() const
-{
-	FScopeLock Lock(&CriticalSection);
-	return ActiveCoroutines;
-}
-
-int32 FAsyncFlowDebugger::GetActiveCount() const
-{
-	return ActiveCount.load(std::memory_order_relaxed);
-}
-
-void FAsyncFlowDebugger::DumpToLog() const
-{
-	FScopeLock Lock(&CriticalSection);
-	const double Now = FPlatformTime::Seconds();
-
-	UE_LOG(LogAsyncFlow, Log, TEXT("=== AsyncFlow Active Coroutines (%d) ==="), ActiveCoroutines.Num());
-	for (const TPair<uint64, FCoroutineDebugInfo>& Pair : ActiveCoroutines)
+	void FAsyncFlowDebugger::Register(uint64 Id, const FString& DebugName)
 	{
-		const double Age = Now - Pair.Value.CreationTime;
-		UE_LOG(LogAsyncFlow, Log, TEXT("  [0x%llX] %s — age: %.2fs"),
-			Pair.Key,
-			*Pair.Value.DebugName,
-			Age);
+		FScopeLock Lock(&CriticalSection);
+		if (ActiveCoroutines.Contains(Id))
+		{
+			return;
+		}
+		FCoroutineDebugInfo Info;
+		Info.DebugName = DebugName;
+		Info.CreationTime = FPlatformTime::Seconds();
+		ActiveCoroutines.Add(Id, MoveTemp(Info));
+		ActiveCount.fetch_add(1, std::memory_order_relaxed);
 	}
-	UE_LOG(LogAsyncFlow, Log, TEXT("========================================"));
-}
+
+	void FAsyncFlowDebugger::Unregister(uint64 Id)
+	{
+		FScopeLock Lock(&CriticalSection);
+		if (ActiveCoroutines.Remove(Id) > 0)
+		{
+			ActiveCount.fetch_sub(1, std::memory_order_relaxed);
+		}
+	}
+
+	TMap<uint64, FCoroutineDebugInfo> FAsyncFlowDebugger::GetActiveCoroutines() const
+	{
+		FScopeLock Lock(&CriticalSection);
+		return ActiveCoroutines;
+	}
+
+	int32 FAsyncFlowDebugger::GetActiveCount() const
+	{
+		return ActiveCount.load(std::memory_order_relaxed);
+	}
+
+	void FAsyncFlowDebugger::DumpToLog() const
+	{
+		FScopeLock Lock(&CriticalSection);
+		const double Now = FPlatformTime::Seconds();
+
+		UE_LOG(LogAsyncFlow, Log, TEXT("=== AsyncFlow Active Coroutines (%d) ==="), ActiveCoroutines.Num());
+		for (const TPair<uint64, FCoroutineDebugInfo>& Pair : ActiveCoroutines)
+		{
+			const double Age = Now - Pair.Value.CreationTime;
+			UE_LOG(LogAsyncFlow, Log, TEXT("  [0x%llX] %s — age: %.2fs"), Pair.Key, *Pair.Value.DebugName, Age);
+		}
+		UE_LOG(LogAsyncFlow, Log, TEXT("========================================"));
+	}
 
 } // namespace AsyncFlow
-

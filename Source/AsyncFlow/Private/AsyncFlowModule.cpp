@@ -22,17 +22,23 @@
 
 // AsyncFlowModule.cpp — Module registration for AsyncFlow core.
 #include "AsyncFlowModule.h"
+#include "AsyncFlowDebug.h"
 
 #define LOCTEXT_NAMESPACE "FAsyncFlowModule"
 
-// Nothing to initialize or tear down — all subsystems are UWorldSubsystem
-// instances that UE4/5 manages automatically.
 void FAsyncFlowModule::StartupModule()
 {
+	ListCmd = MakeUnique<FAutoConsoleCommand>(
+		TEXT("AsyncFlow.List"),
+		TEXT("Dumps all active AsyncFlow coroutines and their names/ages to the output log."),
+		FConsoleCommandDelegate::CreateLambda([]() {
+			AsyncFlow::FAsyncFlowDebugger::Get().DumpToLog();
+		}));
 }
 
 void FAsyncFlowModule::ShutdownModule()
 {
+	ListCmd.Reset();
 }
 
 #undef LOCTEXT_NAMESPACE

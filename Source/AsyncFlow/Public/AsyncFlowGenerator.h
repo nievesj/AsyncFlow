@@ -37,15 +37,15 @@
 namespace AsyncFlow
 {
 
-// Forward declaration
-template <typename T>
-class TGenerator;
+	// Forward declaration
+	template <typename T>
+	class TGenerator;
 
-// ============================================================================
-// TGeneratorPromise<T> — promise type for TGenerator<T>
-// ============================================================================
+	// ============================================================================
+	// TGeneratorPromise<T> — promise type for TGenerator<T>
+	// ============================================================================
 
-/**
+	/**
  * Promise type for TGenerator<T>. Manages yielded values and frame lifetime.
  *
  * Yielded lvalues are stored by pointer (zero-copy). Yielded rvalues are
@@ -55,62 +55,70 @@ class TGenerator;
  *
  * @tparam T  The type of each yielded value.
  */
-template <typename T>
-struct TGeneratorPromise
-{
-	/** Holds the last yielded rvalue. Reset before each yield_value(T&&). */
-	TOptional<T> StoredValue;
+	template <typename T>
+	struct TGeneratorPromise
+	{
+		/** Holds the last yielded rvalue. Reset before each yield_value(T&&). */
+		TOptional<T> StoredValue;
 
-	/** Points to the current yielded value — either into StoredValue or directly at the lvalue. */
-	T* CurrentValue = nullptr;
+		/** Points to the current yielded value — either into StoredValue or directly at the lvalue. */
+		T* CurrentValue = nullptr;
 
-	/** Captured if the coroutine body throws. Rethrown in MoveNext(). */
-	std::exception_ptr Exception;
+		/** Captured if the coroutine body throws. Rethrown in MoveNext(). */
+		std::exception_ptr Exception;
 
-	TGenerator<T> get_return_object();
+		TGenerator<T> get_return_object();
 
-	std::suspend_always initial_suspend() const noexcept { return {}; }
-	std::suspend_always final_suspend() const noexcept { return {}; }
+		std::suspend_always initial_suspend() const noexcept
+		{
+			return {};
+		}
+		std::suspend_always final_suspend() const noexcept
+		{
+			return {};
+		}
 
-	/**
+		/**
 	 * Yield an lvalue reference. No copy — CurrentValue points directly at the caller's variable.
 	 * The reference must remain valid until the next MoveNext() call.
 	 */
-	std::suspend_always yield_value(T& Value)
-	{
-		StoredValue.Reset();
-		CurrentValue = &Value;
-		return {};
-	}
+		std::suspend_always yield_value(T& Value)
+		{
+			StoredValue.Reset();
+			CurrentValue = &Value;
+			return {};
+		}
 
-	/**
+		/**
 	 * Yield an rvalue. The value is moved into StoredValue and CurrentValue
 	 * points into the TOptional.
 	 */
-	std::suspend_always yield_value(T&& Value)
-	{
-		StoredValue.Emplace(MoveTemp(Value));
-		CurrentValue = &StoredValue.GetValue();
-		return {};
-	}
+		std::suspend_always yield_value(T&& Value)
+		{
+			StoredValue.Emplace(MoveTemp(Value));
+			CurrentValue = &StoredValue.GetValue();
+			return {};
+		}
 
-	void return_void() {}
+		void return_void()
+		{
+		}
 
-	void unhandled_exception()
-	{
-		Exception = std::current_exception();
-	}
+		void unhandled_exception()
+		{
+			Exception = std::current_exception();
+		}
 
-	/** co_await is not supported inside generators — compile-time error. */
-	template <typename AwaiterType>
-	AwaiterType&& await_transform(AwaiterType&& Awaiter) = delete;
-};
+		/** co_await is not supported inside generators — compile-time error. */
+		template <typename AwaiterType>
+		AwaiterType&& await_transform(AwaiterType&& Awaiter) = delete;
+	};
 
-// ============================================================================
-// TGenerator<T> — synchronous pull-based coroutine generator
-// ============================================================================
+	// ============================================================================
+	// TGenerator<T> — synchronous pull-based coroutine generator
+	// ============================================================================
 
-/**
+	/**
  * Lazy O(1)-memory iterator driven by co_yield. Move-only, single-owner.
  *
  * Each call to MoveNext() resumes the coroutine until the next co_yield
@@ -128,146 +136,162 @@ struct TGeneratorPromise
  *   }
  *   for (int32 Val : CountTo(10)) { ... }
  */
-template <typename T>
-class TGenerator
-{
-public:
-	using promise_type = TGeneratorPromise<T>;
-	using CoroutineHandle = std::coroutine_handle<promise_type>;
-
-	TGenerator() = default;
-
-	explicit TGenerator(CoroutineHandle InHandle)
-		: Handle(InHandle)
+	template <typename T>
+	class TGenerator
 	{
-	}
+	public:
+		using promise_type = TGeneratorPromise<T>;
+		using CoroutineHandle = std::coroutine_handle<promise_type>;
 
-	~TGenerator()
-	{
-		if (Handle)
+		TGenerator() = default;
+
+		explicit TGenerator(CoroutineHandle InHandle)
+			: Handle(InHandle)
 		{
-			Handle.destroy();
-			Handle = nullptr;
 		}
-	}
 
-	// Move only
-	TGenerator(TGenerator&& Other) noexcept
-		: Handle(Other.Handle)
-	{
-		Other.Handle = nullptr;
-	}
-
-	TGenerator& operator=(TGenerator&& Other) noexcept
-	{
-		if (this != &Other)
+		~TGenerator()
 		{
-			if (Handle) { Handle.destroy(); }
-			Handle = Other.Handle;
+			if (Handle)
+			{
+				Handle.destroy();
+				Handle = nullptr;
+			}
+		}
+
+		// Move only
+		TGenerator(TGenerator&& Other) noexcept
+			: Handle(Other.Handle)
+		{
 			Other.Handle = nullptr;
 		}
-		return *this;
-	}
 
-	TGenerator(const TGenerator&) = delete;
-	TGenerator& operator=(const TGenerator&) = delete;
+		TGenerator& operator=(TGenerator&& Other) noexcept
+		{
+			if (this != &Other)
+			{
+				if (Handle)
+				{
+					Handle.destroy();
+				}
+				Handle = Other.Handle;
+				Other.Handle = nullptr;
+			}
+			return *this;
+		}
 
-	/**
+		TGenerator(const TGenerator&) = delete;
+		TGenerator& operator=(const TGenerator&) = delete;
+
+		/**
 	 * Advance to the next yielded value.
 	 *
 	 * @return false if the generator is exhausted (coroutine returned).
 	 * @warning Rethrows any exception captured from the coroutine body.
 	 */
-	bool MoveNext()
-	{
-		if (!Handle || Handle.done())
+		bool MoveNext()
 		{
-			return false;
+			if (!Handle || Handle.done())
+			{
+				return false;
+			}
+			Handle.resume();
+			if (Handle.promise().Exception)
+			{
+				std::rethrow_exception(Handle.promise().Exception);
+			}
+			return !Handle.done();
 		}
-		Handle.resume();
-		if (Handle.promise().Exception)
-		{
-			std::rethrow_exception(Handle.promise().Exception);
-		}
-		return !Handle.done();
-	}
 
-	/**
+		/**
 	 * Access the current yielded value. Only valid after MoveNext() returns true.
 	 * @warning Undefined behavior if called after MoveNext() returned false.
 	 */
-	T& Current()
-	{
-		return *Handle.promise().CurrentValue;
-	}
+		T& Current()
+		{
+			return *Handle.promise().CurrentValue;
+		}
 
-	const T& Current() const
-	{
-		return *Handle.promise().CurrentValue;
-	}
+		const T& Current() const
+		{
+			return *Handle.promise().CurrentValue;
+		}
 
-	// ========================================================================
-	// STL iterator support for range-based for
-	// ========================================================================
+		// ========================================================================
+		// STL iterator support for range-based for
+		// ========================================================================
 
-	/**
+		/**
 	 * Forward iterator for range-based for. Calls MoveNext() on construction
 	 * and on each operator++. Compares done-state for termination.
 	 */
-	struct FIterator
-	{
-		TGenerator* Gen = nullptr;
-		bool bDone = true;
-
-		FIterator() = default;
-		explicit FIterator(TGenerator* InGen) : Gen(InGen), bDone(false)
+		struct FIterator
 		{
-			// Advance to the first value
-			if (Gen && !Gen->MoveNext())
+			TGenerator* Gen = nullptr;
+			bool bDone = true;
+
+			FIterator() = default;
+			explicit FIterator(TGenerator* InGen)
+				: Gen(InGen)
+				, bDone(false)
 			{
-				bDone = true;
+				// Advance to the first value
+				if (Gen && !Gen->MoveNext())
+				{
+					bDone = true;
+				}
 			}
-		}
 
-		T& operator*() { return Gen->Current(); }
-		const T& operator*() const { return Gen->Current(); }
-
-		FIterator& operator++()
-		{
-			if (Gen && !Gen->MoveNext())
+			T& operator*()
 			{
-				bDone = true;
+				return Gen->Current();
 			}
-			return *this;
+			const T& operator*() const
+			{
+				return Gen->Current();
+			}
+
+			FIterator& operator++()
+			{
+				if (Gen && !Gen->MoveNext())
+				{
+					bDone = true;
+				}
+				return *this;
+			}
+
+			bool operator!=(const FIterator& Other) const
+			{
+				return bDone != Other.bDone;
+			}
+
+			bool operator==(const FIterator& Other) const
+			{
+				return bDone == Other.bDone;
+			}
+		};
+
+		FIterator begin()
+		{
+			return FIterator(this);
+		}
+		FIterator end()
+		{
+			return FIterator();
 		}
 
-		bool operator!=(const FIterator& Other) const
-		{
-			return bDone != Other.bDone;
-		}
-
-		bool operator==(const FIterator& Other) const
-		{
-			return bDone == Other.bDone;
-		}
+	private:
+		CoroutineHandle Handle = nullptr;
 	};
 
-	FIterator begin() { return FIterator(this); }
-	FIterator end() { return FIterator(); }
+	// ============================================================================
+	// get_return_object implementation
+	// ============================================================================
 
-private:
-	CoroutineHandle Handle = nullptr;
-};
-
-// ============================================================================
-// get_return_object implementation
-// ============================================================================
-
-template <typename T>
-TGenerator<T> TGeneratorPromise<T>::get_return_object()
-{
-	return TGenerator<T>(std::coroutine_handle<TGeneratorPromise<T>>::from_promise(*this));
-}
+	template <typename T>
+	TGenerator<T> TGeneratorPromise<T>::get_return_object()
+	{
+		return TGenerator<T>(std::coroutine_handle<TGeneratorPromise<T>>::from_promise(*this));
+	}
 
 } // namespace AsyncFlow
-

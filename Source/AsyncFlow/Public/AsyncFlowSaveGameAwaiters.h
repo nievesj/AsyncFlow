@@ -36,60 +36,70 @@
 namespace AsyncFlow
 {
 
-// ============================================================================
-// AsyncSaveGame — async save to slot
-// ============================================================================
+	// ============================================================================
+	// AsyncSaveGame — async save to slot
+	// ============================================================================
 
-/**
+	/**
  * Awaiter that asynchronously saves a USaveGame object to a slot.
  * Wraps UGameplayStatics::AsyncSaveGameToSlot.
  *
  * @warning The save object must remain valid for the duration of the save.
  */
-struct FAsyncSaveGameAwaiter
-{
-	USaveGame* SaveGame = nullptr;
-	FString SlotName;
-	int32 UserIndex = 0;
-	bool bSuccess = false;
-	std::coroutine_handle<> Continuation;
-	TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
-
-	~FAsyncSaveGameAwaiter() { *AliveFlag = false; }
-
-	bool await_ready() const { return false; }
-
-	void await_suspend(std::coroutine_handle<> Handle)
+	struct FAsyncSaveGameAwaiter
 	{
-		Continuation = Handle;
+		USaveGame* SaveGame = nullptr;
+		FString SlotName;
+		int32 UserIndex = 0;
+		bool bSuccess = false;
+		std::coroutine_handle<> Continuation;
+		TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
 
-		if (!SaveGame)
+		~FAsyncSaveGameAwaiter()
 		{
-			Handle.resume();
-			return;
+			*AliveFlag = false;
 		}
 
-		TWeakPtr<bool> WeakAlive = AliveFlag;
-		UGameplayStatics::AsyncSaveGameToSlot(
-			SaveGame,
-			SlotName,
-			UserIndex,
-			FAsyncSaveGameToSlotDelegate::CreateLambda([this, WeakAlive](const FString& InSlotName, int32 InUserIndex, bool bWasSuccessful)
+		bool await_ready() const
+		{
+			return false;
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			Continuation = Handle;
+
+			if (!SaveGame)
 			{
-				if (!WeakAlive.IsValid()) { return; }
-				bSuccess = bWasSuccessful;
-				if (Continuation && !Continuation.done())
-				{
-					Continuation.resume();
-				}
-			})
-		);
-	}
+				Handle.resume();
+				return;
+			}
 
-	bool await_resume() const { return bSuccess; }
-};
+			TWeakPtr<bool> WeakAlive = AliveFlag;
+			UGameplayStatics::AsyncSaveGameToSlot(
+				SaveGame,
+				SlotName,
+				UserIndex,
+				FAsyncSaveGameToSlotDelegate::CreateLambda([this, WeakAlive](const FString& InSlotName, int32 InUserIndex, bool bWasSuccessful) {
+					if (!WeakAlive.IsValid())
+					{
+						return;
+					}
+					bSuccess = bWasSuccessful;
+					if (Continuation && !Continuation.done())
+					{
+						Continuation.resume();
+					}
+				}));
+		}
 
-/**
+		bool await_resume() const
+		{
+			return bSuccess;
+		}
+	};
+
+	/**
  * Asynchronously save a USaveGame to a slot.
  *
  * @param SaveGame  The save game object.
@@ -97,65 +107,74 @@ struct FAsyncSaveGameAwaiter
  * @param UserIndex Local user index (0 for most single-player games).
  * @return          An awaiter — co_await yields bool (true = success).
  */
-[[nodiscard]] inline FAsyncSaveGameAwaiter AsyncSaveGame(USaveGame* SaveGame, const FString& SlotName, int32 UserIndex = 0)
-{
-	return FAsyncSaveGameAwaiter{SaveGame, SlotName, UserIndex};
-}
+	[[nodiscard]] inline FAsyncSaveGameAwaiter AsyncSaveGame(USaveGame* SaveGame, const FString& SlotName, int32 UserIndex = 0)
+	{
+		return FAsyncSaveGameAwaiter{ SaveGame, SlotName, UserIndex };
+	}
 
-// ============================================================================
-// AsyncLoadGame — async load from slot
-// ============================================================================
+	// ============================================================================
+	// AsyncLoadGame — async load from slot
+	// ============================================================================
 
-/**
+	/**
  * Awaiter that asynchronously loads a USaveGame from a slot.
  * Wraps UGameplayStatics::AsyncLoadGameFromSlot.
  */
-struct FAsyncLoadGameAwaiter
-{
-	FString SlotName;
-	int32 UserIndex = 0;
-	USaveGame* LoadedSaveGame = nullptr;
-	std::coroutine_handle<> Continuation;
-	TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
-
-	~FAsyncLoadGameAwaiter() { *AliveFlag = false; }
-
-	bool await_ready() const { return false; }
-
-	void await_suspend(std::coroutine_handle<> Handle)
+	struct FAsyncLoadGameAwaiter
 	{
-		Continuation = Handle;
+		FString SlotName;
+		int32 UserIndex = 0;
+		USaveGame* LoadedSaveGame = nullptr;
+		std::coroutine_handle<> Continuation;
+		TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
 
-		TWeakPtr<bool> WeakAlive = AliveFlag;
-		UGameplayStatics::AsyncLoadGameFromSlot(
-			SlotName,
-			UserIndex,
-			FAsyncLoadGameFromSlotDelegate::CreateLambda([this, WeakAlive](const FString& InSlotName, int32 InUserIndex, USaveGame* InSaveGame)
-			{
-				if (!WeakAlive.IsValid()) { return; }
-				LoadedSaveGame = InSaveGame;
-				if (Continuation && !Continuation.done())
-				{
-					Continuation.resume();
-				}
-			})
-		);
-	}
+		~FAsyncLoadGameAwaiter()
+		{
+			*AliveFlag = false;
+		}
 
-	USaveGame* await_resume() const { return LoadedSaveGame; }
-};
+		bool await_ready() const
+		{
+			return false;
+		}
 
-/**
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			Continuation = Handle;
+
+			TWeakPtr<bool> WeakAlive = AliveFlag;
+			UGameplayStatics::AsyncLoadGameFromSlot(
+				SlotName,
+				UserIndex,
+				FAsyncLoadGameFromSlotDelegate::CreateLambda([this, WeakAlive](const FString& InSlotName, int32 InUserIndex, USaveGame* InSaveGame) {
+					if (!WeakAlive.IsValid())
+					{
+						return;
+					}
+					LoadedSaveGame = InSaveGame;
+					if (Continuation && !Continuation.done())
+					{
+						Continuation.resume();
+					}
+				}));
+		}
+
+		USaveGame* await_resume() const
+		{
+			return LoadedSaveGame;
+		}
+	};
+
+	/**
  * Asynchronously load a USaveGame from a slot.
  *
  * @param SlotName  The save slot name.
  * @param UserIndex Local user index.
  * @return          An awaiter — co_await yields USaveGame* (nullptr on failure).
  */
-[[nodiscard]] inline FAsyncLoadGameAwaiter AsyncLoadGame(const FString& SlotName, int32 UserIndex = 0)
-{
-	return FAsyncLoadGameAwaiter{SlotName, UserIndex};
-}
+	[[nodiscard]] inline FAsyncLoadGameAwaiter AsyncLoadGame(const FString& SlotName, int32 UserIndex = 0)
+	{
+		return FAsyncLoadGameAwaiter{ SlotName, UserIndex };
+	}
 
 } // namespace AsyncFlow
-
