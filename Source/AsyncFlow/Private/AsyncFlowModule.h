@@ -23,12 +23,17 @@
 // AsyncFlowModule.h — IModuleInterface entry point for the AsyncFlow core module.
 #pragma once
 
+#include "HAL/IConsoleManager.h"
 #include "Modules/ModuleManager.h"
+#include "Templates/UniquePtr.h"
 
-/** Core module for AsyncFlow. No startup/shutdown work is required at this time. */
+/** Core module for AsyncFlow. Registers the AsyncFlow.List console command on startup. */
 class FAsyncFlowModule : public IModuleInterface
 {
 public:
 	virtual void StartupModule() override;
 	virtual void ShutdownModule() override;
+
+private:
+	TUniquePtr<FAutoConsoleCommand> ListCmd;
 };

@@ -35,6 +35,10 @@ namespace AsyncFlow
 	void FAsyncFlowDebugger::Register(uint64 Id, const FString& DebugName)
 	{
 		FScopeLock Lock(&CriticalSection);
+		if (ActiveCoroutines.Contains(Id))
+		{
+			return;
+		}
 		FCoroutineDebugInfo Info;
 		Info.DebugName = DebugName;
 		Info.CreationTime = FPlatformTime::Seconds();

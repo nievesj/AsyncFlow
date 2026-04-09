@@ -2,7 +2,8 @@
 
 **Header:** Include individually as needed — not part of the umbrella `AsyncFlow.h` header.
 
-These awaiters wrap common UE engine systems. Each has a dedicated header to avoid pulling heavy engine dependencies into every translation unit.
+These awaiters wrap common UE engine systems. Each has a dedicated header to avoid pulling heavy engine dependencies
+into every translation unit.
 
 ---
 
@@ -224,28 +225,13 @@ bool bFinished = co_await AsyncFlow::PlayMontageAndWait(
 );
 ```
 
-### WaitForMontageBlendOut
+### WaitForMontageEnded
 
-Wait for a montage's blend-out to start.
-
-```cpp
-co_await AsyncFlow::WaitForMontageBlendOut(AnimInstance, AttackMontage);
-```
-
-### NextNotify
-
-Wait for a montage to finish playing. (Current implementation polls for montage completion. See source comments for dynamic delegate relay pattern for true per-notify detection.)
+Wait for an already-playing montage to finish. Does **not** start playback — the montage must already be playing. If no
+matching montage is active, resumes immediately.
 
 ```cpp
-co_await AsyncFlow::NextNotify(AnimInstance, AttackMontage, TEXT("HitWindow"));
-```
-
-### WaitForMontageNotifyEnd
-
-Same polling-based wait. Falls back to montage completion detection.
-
-```cpp
-co_await AsyncFlow::WaitForMontageNotifyEnd(AnimInstance, AttackMontage, TEXT("HitWindow"));
+co_await AsyncFlow::WaitForMontageEnded(AnimInstance, AttackMontage);
 ```
 
 ---
@@ -303,10 +289,10 @@ if (bSuccess && Response.IsValid())
 
 ### PlaySequenceAndWait
 
-Play a `UMovieSceneSequencePlayer` and wait for it to finish.
+Play a level sequence via an `ALevelSequenceActor` placed in the level and wait for it to finish.
 
 ```cpp
-co_await AsyncFlow::PlaySequenceAndWait(SequencePlayer);
+co_await AsyncFlow::PlaySequenceAndWait(MyLevelSequenceActor);
 ```
 
 ---
@@ -343,7 +329,8 @@ if (Save)
 
 ### Timeline
 
-Per-tick interpolation from one value to another over a duration. Calls the update callback each frame with the interpolated value.
+Per-tick interpolation from one value to another over a duration. Calls the update callback each frame with the
+interpolated value.
 
 ```cpp
 co_await AsyncFlow::Timeline(this, 0.0f, 1.0f, 0.5f, [this](float Alpha)

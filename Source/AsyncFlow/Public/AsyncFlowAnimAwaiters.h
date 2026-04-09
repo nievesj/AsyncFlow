@@ -195,7 +195,7 @@ namespace AsyncFlow
  *
  * @param AnimInstance  The animation instance.
  * @param Montage       The montage to wait on. Must already be playing.
- * @return              An awaiter — co_await yields bool (true = completed normally, false = interrupted).
+ * @return              An awaiter — co_await yields void. Resumes when the montage stops playing or the instance is invalidated.
  */
 	[[nodiscard]] inline FWaitForMontageEndedAwaiter WaitForMontageEnded(UAnimInstance* AnimInstance, UAnimMontage* Montage)
 	{

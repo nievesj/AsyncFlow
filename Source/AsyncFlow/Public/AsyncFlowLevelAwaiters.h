@@ -226,7 +226,7 @@ namespace AsyncFlow
  *
  * @param WorldContext  Any UObject with a valid GetWorld().
  * @param LevelName    The streaming level name.
- * @return             An awaiter — use with co_await. Returns void.
+ * @return             An awaiter — use with co_await. Returns true on success.
  */
 	[[nodiscard]] inline FUnloadStreamLevelAwaiter UnloadStreamLevel(UObject* WorldContext, FName LevelName)
 	{

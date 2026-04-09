@@ -334,6 +334,19 @@ namespace AsyncFlow
 			InnerAwaiter Inner;
 			TSharedPtr<FAsyncFlowState> State;
 
+			/**
+			 * Alive flag tied to this co_await site. Set to false in the destructor,
+			 * which fires when the coroutine frame is destroyed while suspended here.
+			 * Awaitables that support await_suspend_alive() use this to skip resuming
+			 * a dangling frame.
+			 */
+			TSharedPtr<bool> Alive = MakeShared<bool>(true);
+
+			~TContractCheckAwaiter()
+			{
+				*Alive = false;
+			}
+
 			bool await_ready()
 			{
 				if (State && State->ShouldCancel())
@@ -350,7 +363,16 @@ namespace AsyncFlow
 			template <typename HandleType>
 			auto await_suspend(HandleType Handle)
 			{
-				return Inner.await_suspend(Handle);
+				// Prefer the alive-flag-aware overload when the inner awaitable supports it.
+				// This prevents Signal()/Release() from touching a destroyed coroutine frame.
+				if constexpr (requires { Inner.await_suspend_alive(Handle, TWeakPtr<bool>{}); })
+				{
+					return Inner.await_suspend_alive(Handle, TWeakPtr<bool>(Alive));
+				}
+				else
+				{
+					return Inner.await_suspend(Handle);
+				}
 			}
 
 			auto await_resume()

@@ -25,17 +25,20 @@
 // Wraps ALevelSequenceActor playback as a co_awaitable. PlaySequenceAndWait
 // plays a sequence from a level sequence actor and suspends until it finishes.
 //
-// Guarded with __has_include — if MovieScene/LevelSequence modules are not
-// present, this header compiles to nothing.
+// Guarded with __has_include — if the LevelSequence module is not present,
+// this header compiles to nothing.
 #pragma once
 
-#include "AsyncFlowTask.h"
-#include "AsyncFlowTickSubsystem.h"
-#include "AsyncFlowAwaiters.h"
-#include "MovieSceneSequencePlayer.h"
-#include "Engine/World.h"
+#if __has_include("LevelSequenceActor.h")
 
-#include <coroutine>
+	#include "AsyncFlowTask.h"
+	#include "AsyncFlowTickSubsystem.h"
+	#include "AsyncFlowAwaiters.h"
+	#include "LevelSequenceActor.h"
+	#include "MovieSceneSequencePlayer.h"
+	#include "Engine/World.h"
+
+	#include <coroutine>
 
 namespace AsyncFlow
 {
@@ -46,8 +49,8 @@ namespace AsyncFlow
  *
  * If the actor or its sequence player is null, resumes immediately.
  *
- * @note Requires MovieScene and LevelSequence modules. This header
- *       is a no-op if those modules are unavailable.
+ * @note Requires the LevelSequence module. This header is a no-op if
+ *       LevelSequenceActor.h is unavailable.
  */
 	struct FPlaySequenceAndWaitAwaiter
 	{
@@ -115,3 +118,5 @@ namespace AsyncFlow
 	}
 
 } // namespace AsyncFlow
+
+#endif // __has_include("LevelSequenceActor.h")

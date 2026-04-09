@@ -26,13 +26,15 @@
 // rather than blocking threads. Multiple coroutines can wait on the same primitive
 // without blocking any threads.
 //
-// Game-thread-only. Not suitable for cross-thread synchronization.
+// Thread-safe: Signal(), Reset(), and Release() can be called from any thread.
+// Waiters always resume on the game thread via AsyncTask(ENamedThreads::GameThread).
 #pragma once
 
 #include "Async/Async.h"
 #include "AsyncFlowTask.h"
 #include "Containers/Array.h"
 #include "HAL/CriticalSection.h"
+#include "Templates/SharedPointer.h"
 
 #include <atomic>
 #include <coroutine>
@@ -60,65 +62,117 @@ namespace AsyncFlow
 	 *   // In one coroutine:
 	 *   co_await DoorOpened; // suspends until Signal() is called
 	 *
-	 *   // In game logic:
-	 *   DoorOpened.Signal(); // resumes all waiters
+	 *   // In game logic (any thread):
+	 *   DoorOpened.Signal(); // resumes all waiters on the game thread
 	 */
 	struct FAwaitableEvent
 	{
+		FAwaitableEvent() = default;
+		FAwaitableEvent(const FAwaitableEvent&) = delete;
+		FAwaitableEvent& operator=(const FAwaitableEvent&) = delete;
+
 		/**
 		 * @return true if the event is currently in the signaled state.
-		 * co_await on a signaled event returns immediately.
+		 * This is a relaxed-atomic read and may return a slightly stale value
+		 * when called concurrently with Signal()/Reset().
 		 */
 		bool IsSignaled() const
 		{
-			return bSignaled;
+			return bSignaled.load(std::memory_order_relaxed);
 		}
 
 		/**
-		 * Signal the event. All currently suspended coroutines resume.
-		 * Subsequent co_awaits skip suspension until Reset() is called.
+		 * Signal the event. All currently suspended coroutines resume on the
+		 * game thread. Subsequent co_awaits skip suspension until Reset().
+		 * Thread-safe — may be called from any thread.
 		 */
 		void Signal()
 		{
-			TArray<std::coroutine_handle<>> LocalWaiters;
+			TArray<FWaiterEntry> LocalWaiters;
 			{
 				FScopeLock Lock(&CriticalSection);
-				bSignaled = true;
+				bSignaled.store(true, std::memory_order_relaxed);
 				LocalWaiters = MoveTemp(Waiters);
 			}
 
-			for (std::coroutine_handle<> Handle : LocalWaiters)
+			for (const FWaiterEntry& Entry : LocalWaiters)
 			{
-				if (Handle && !Handle.done())
+				const std::coroutine_handle<> Handle = Entry.Handle;
+
+				if (Entry.bHasAliveFlag)
 				{
-					AsyncTask(ENamedThreads::GameThread, [Handle]() { Handle.resume(); });
+					// Protected path: only resume if the coroutine frame is still alive.
+					const TWeakPtr<bool> WeakAlive = Entry.AliveFlag;
+					AsyncTask(ENamedThreads::GameThread, [Handle, WeakAlive]() {
+						if (const TSharedPtr<bool> Alive = WeakAlive.Pin(); Alive && *Alive)
+						{
+							Handle.resume();
+						}
+					});
+				}
+				else
+				{
+					// Legacy path: no alive flag; check done() as a best-effort guard.
+					AsyncTask(ENamedThreads::GameThread, [Handle]() {
+						if (Handle && !Handle.done())
+						{
+							Handle.resume();
+						}
+					});
 				}
 			}
 		}
 
 		/**
 		 * Reset the event to the non-signaled state.
-		 * Future co_awaits will suspend again. Does not affect already-resumed coroutines.
+		 * Future co_awaits will suspend again.
+		 * Thread-safe — may be called from any thread.
 		 */
 		void Reset()
 		{
-			bSignaled = false;
+			bSignaled.store(false, std::memory_order_relaxed);
 		}
 
-		// co_await interface
+		// co_await interface ---------------------------------------------------------
+
+		/**
+		 * @return true if the event is already signaled. Called by the coroutine
+		 * machinery before await_suspend to fast-path already-signaled events.
+		 */
 		bool await_ready() const
 		{
-			return bSignaled;
+			return bSignaled.load(std::memory_order_relaxed);
 		}
 
+		/**
+		 * Suspend the coroutine. Called by TContractCheckAwaiter (via await_suspend_alive)
+		 * or directly by non-TTask coroutines (legacy path). Returns false if the event
+		 * was signaled in the window between await_ready and now.
+		 */
 		bool await_suspend(std::coroutine_handle<> Handle)
 		{
 			FScopeLock Lock(&CriticalSection);
-			if (bSignaled)
+			if (bSignaled.load(std::memory_order_relaxed))
 			{
-				return false; // Already signaled between await_ready and here — don't suspend
+				return false; // Signaled between await_ready and here — don't suspend
 			}
-			Waiters.Add(Handle);
+			Waiters.Add({ Handle, TWeakPtr<bool>{}, false });
+			return true;
+		}
+
+		/**
+		 * Alive-flag-aware suspend. Called by TContractCheckAwaiter which holds the
+		 * alive flag for this co_await site. Signal() will not resume the handle once
+		 * the coroutine frame has been destroyed (alive flag set to false).
+		 */
+		bool await_suspend_alive(std::coroutine_handle<> Handle, TWeakPtr<bool> InAliveFlag)
+		{
+			FScopeLock Lock(&CriticalSection);
+			if (bSignaled.load(std::memory_order_relaxed))
+			{
+				return false;
+			}
+			Waiters.Add({ Handle, MoveTemp(InAliveFlag), true });
 			return true;
 		}
 
@@ -127,16 +181,24 @@ namespace AsyncFlow
 		}
 
 	private:
-		bool bSignaled = false;
-		mutable FCriticalSection CriticalSection;
+		struct FWaiterEntry
+		{
+			std::coroutine_handle<> Handle;
+			TWeakPtr<bool> AliveFlag;
+			bool bHasAliveFlag;
+		};
 
-		/** Suspended coroutine handles waiting for Signal(). */
-		TArray<std::coroutine_handle<>> Waiters;
+		std::atomic<bool> bSignaled{ false };
+		mutable FCriticalSection CriticalSection;
+		TArray<FWaiterEntry> Waiters;
 	};
 
 	// ============================================================================
 	// FAwaitableSemaphore — counting semaphore for coroutines
 	// ============================================================================
+
+	// Forward-declared so FAcquireGuardedAwaiter can be a friend.
+	struct FAcquireGuardedAwaiter;
 
 	/**
 	 * Coroutine-compatible counting semaphore. Controls concurrent access
@@ -159,9 +221,10 @@ namespace AsyncFlow
 	 */
 	struct FAwaitableSemaphore
 	{
+		friend struct FAcquireGuardedAwaiter;
+
 		/**
-		 * @param InMaxCount  Maximum number of concurrent permits.
-		 *                    Must be >= 1.
+		 * @param InMaxCount  Maximum number of concurrent permits. Must be >= 1.
 		 */
 		explicit FAwaitableSemaphore(int32 InMaxCount = 1)
 			: MaxCount(InMaxCount)
@@ -169,59 +232,155 @@ namespace AsyncFlow
 			check(InMaxCount >= 1);
 		}
 
-		/** @return the number of currently available permits. */
+		FAwaitableSemaphore(const FAwaitableSemaphore&) = delete;
+		FAwaitableSemaphore& operator=(const FAwaitableSemaphore&) = delete;
+
+		/**
+		 * @return the number of currently available permits.
+		 * This is a relaxed-atomic read and may reflect a slightly stale count
+		 * when called concurrently with acquire/release operations.
+		 */
 		int32 GetAvailable() const
 		{
-			return MaxCount - CurrentCount;
+			return MaxCount - CurrentCount.load(std::memory_order_relaxed);
 		}
 
 		/**
-		 * Return one permit. Resumes the oldest waiting coroutine, if any.
+		 * Return one permit. Resumes the oldest live waiting coroutine, if any.
+		 * Dead waiters (frames destroyed while queued) are skipped automatically.
+		 * If no live waiters remain, the permit count is decremented.
 		 *
-		 * @warning Calling Release() more times than permits were acquired
-		 *          is a programming error (CurrentCount would go negative).
+		 * @warning Calling Release() more times than permits were acquired triggers
+		 *          an ensure.
+		 * @warning The semaphore must outlive any AsyncTask callbacks posted by
+		 *          Release(). Destroying the semaphore while callbacks are in flight
+		 *          is a programming error.
 		 */
 		void Release()
 		{
 			std::coroutine_handle<> HandleToResume;
+			TWeakPtr<bool> LiveAlive;
+			bool bFoundWaiter = false;
+			bool bWaiterIsProtected = false;
+
 			{
 				FScopeLock Lock(&CriticalSection);
-				if (Waiters.Num() > 0)
+
+				// Walk the queue from the head, skipping dead protected waiters.
+				while (WaiterHead < Waiters.Num())
 				{
-					// Hand the released permit directly to the next waiter.
-					// CurrentCount stays the same — one released, one acquired.
-					HandleToResume = Waiters[0];
-					Waiters.RemoveAt(0);
+					FWaiterEntry& Entry = Waiters[WaiterHead++];
+
+					if (Entry.bHasAliveFlag)
+					{
+						// Protected entry: only hand permit if the frame is still alive.
+						if (Entry.AliveFlag.Pin())
+						{
+							HandleToResume = Entry.Handle;
+							LiveAlive = Entry.AliveFlag;
+							bFoundWaiter = true;
+							bWaiterIsProtected = true;
+							break;
+						}
+						// Dead protected entry: no permit was counted for it — skip.
+					}
+					else
+					{
+						// Legacy unprotected entry: always hand the permit.
+						HandleToResume = Entry.Handle;
+						bFoundWaiter = true;
+						bWaiterIsProtected = false;
+						break;
+					}
+				}
+
+				// Compact once the entire queue has been drained.
+				if (WaiterHead >= Waiters.Num())
+				{
+					Waiters.Reset();
+					WaiterHead = 0;
+				}
+
+				if (!bFoundWaiter)
+				{
+					// No waiter to hand the permit to — truly free it.
+					CurrentCount.fetch_sub(1, std::memory_order_relaxed);
+					ensureMsgf(
+						CurrentCount.load(std::memory_order_relaxed) >= 0,
+						TEXT("FAwaitableSemaphore::Release() called more times than acquired"));
+				}
+				// If bFoundWaiter: permit passes to waiter; CurrentCount unchanged.
+			}
+
+			if (bFoundWaiter)
+			{
+				if (bWaiterIsProtected)
+				{
+					// Protected path: check alive flag on the game thread.
+					// NOTE: 'this' must remain valid until the callback runs.
+					AsyncTask(ENamedThreads::GameThread, [HandleToResume, LiveAlive, this]() {
+						if (const TSharedPtr<bool> Alive = LiveAlive.Pin(); Alive && *Alive)
+						{
+							HandleToResume.resume();
+						}
+						else
+						{
+							// Waiter died after Release() already "gave" it the permit.
+							// Return the permit by releasing again.
+							this->Release();
+						}
+					});
 				}
 				else
 				{
-					--CurrentCount;
-					ensureMsgf(CurrentCount >= 0, TEXT("FAwaitableSemaphore::Release() called more times than acquired"));
+					// Legacy path: resume if not already done.
+					AsyncTask(ENamedThreads::GameThread, [HandleToResume]() {
+						if (HandleToResume && !HandleToResume.done())
+						{
+							HandleToResume.resume();
+						}
+					});
 				}
-			}
-
-			if (HandleToResume && !HandleToResume.done())
-			{
-				AsyncTask(ENamedThreads::GameThread, [HandleToResume]() { HandleToResume.resume(); });
 			}
 		}
 
-		// co_await interface — acquires one permit.
-		// Always enters await_suspend to acquire under the lock atomically.
+		// co_await interface ---------------------------------------------------------
+
+		/** Always returns false — acquisition is done atomically inside await_suspend. */
 		bool await_ready() const
 		{
 			return false;
 		}
 
+		/**
+		 * Acquire one permit under the lock. If permits are available, acquires
+		 * immediately (returns false = don't suspend). Otherwise queues the handle.
+		 */
 		bool await_suspend(std::coroutine_handle<> Handle)
 		{
 			FScopeLock Lock(&CriticalSection);
-			if (CurrentCount < MaxCount)
+			if (CurrentCount.load(std::memory_order_relaxed) < MaxCount)
 			{
-				++CurrentCount;
+				CurrentCount.fetch_add(1, std::memory_order_relaxed);
 				return false; // Acquired — don't suspend
 			}
-			Waiters.Add(Handle);
+			Waiters.Add({ Handle, TWeakPtr<bool>{}, false });
+			return true;
+		}
+
+		/**
+		 * Alive-flag-aware acquire. Called by TContractCheckAwaiter.
+		 * Release() will not resume the handle once the frame is destroyed.
+		 */
+		bool await_suspend_alive(std::coroutine_handle<> Handle, TWeakPtr<bool> InAliveFlag)
+		{
+			FScopeLock Lock(&CriticalSection);
+			if (CurrentCount.load(std::memory_order_relaxed) < MaxCount)
+			{
+				CurrentCount.fetch_add(1, std::memory_order_relaxed);
+				return false;
+			}
+			Waiters.Add({ Handle, MoveTemp(InAliveFlag), true });
 			return true;
 		}
 
@@ -230,16 +389,30 @@ namespace AsyncFlow
 		}
 
 	private:
+		struct FWaiterEntry
+		{
+			std::coroutine_handle<> Handle;
+			TWeakPtr<bool> AliveFlag;
+			bool bHasAliveFlag;
+		};
+
 		int32 MaxCount = 1;
-		int32 CurrentCount = 0;
+		std::atomic<int32> CurrentCount{ 0 };
 		mutable FCriticalSection CriticalSection;
 
 		/** FIFO queue of coroutines waiting for a permit. */
-		TArray<std::coroutine_handle<>> Waiters;
+		TArray<FWaiterEntry> Waiters;
+
+		/**
+		 * Index of the next entry to examine in Waiters.
+		 * Avoids O(n) memmove from RemoveAt(0) on every dequeue.
+		 * Reset to 0 when WaiterHead reaches Waiters.Num().
+		 */
+		int32 WaiterHead = 0;
 	};
 
 	// ============================================================================
-	// FSemaphoreGuard — RAII permit holder (Rule 19: no permit leaks on throw)
+	// FSemaphoreGuard — RAII permit holder (no permit leaks on cancel/throw)
 	// ============================================================================
 
 	/**
@@ -310,7 +483,8 @@ namespace AsyncFlow
 
 	/**
 	 * Awaiter that acquires a semaphore permit and returns an FSemaphoreGuard.
-	 * Combines co_await + RAII in one step.
+	 * Combines co_await + RAII in one step. Uses the alive-flag-aware path so
+	 * Release() does not touch a destroyed coroutine frame.
 	 *
 	 * Usage:
 	 *   auto Guard = co_await AsyncFlow::AcquireGuarded(Semaphore);
@@ -325,10 +499,16 @@ namespace AsyncFlow
 			return false;
 		}
 
+		// Delegates to the semaphore's own await_suspend/await_suspend_alive.
+		// TContractCheckAwaiter wraps this and provides the alive flag.
 		bool await_suspend(std::coroutine_handle<> Handle)
 		{
-			// Delegate to the semaphore's own await_suspend
 			return Semaphore.await_suspend(Handle);
+		}
+
+		bool await_suspend_alive(std::coroutine_handle<> Handle, TWeakPtr<bool> InAliveFlag)
+		{
+			return Semaphore.await_suspend_alive(Handle, MoveTemp(InAliveFlag));
 		}
 
 		FSemaphoreGuard await_resume()

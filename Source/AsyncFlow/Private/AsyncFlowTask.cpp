@@ -51,7 +51,6 @@ namespace AsyncFlow::Private
 
 namespace AsyncFlow
 {
-
 	FCancellationGuard::FCancellationGuard()
 	{
 		State = Private::GetCurrentFlowState();
