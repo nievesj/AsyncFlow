@@ -44,7 +44,7 @@ AsyncFlow::TTask<EAbilitySuccessType> UGA_FireSlash::ExecuteAbility(FAbilityPara
         co_return EAbilitySuccessType::Canceled;
     }
 
-    co_await AsyncFlow::Delay(Avatar, CooldownSeconds);
+    co_await AsyncFlow::Delay(CooldownSeconds);
     co_return EAbilitySuccessType::Finished;
 }
 ```
@@ -53,8 +53,13 @@ AsyncFlow::TTask<EAbilitySuccessType> UGA_FireSlash::ExecuteAbility(FAbilityPara
 
 1. GAS calls `ActivateAbility()`.
 2. The base class calls `ExecuteAbility()`, captures the returned `TTask`, and starts it.
-3. When the coroutine completes, the base class reads the `EAbilitySuccessType` and calls `EndAbility()` with the appropriate `bWasCancelled` flag.
-4. If GAS cancels the ability externally (e.g., stun, death), the base class calls `Cancel()` on the coroutine's flow state. The coroutine stops at the next `co_await`.
+3. Since `TTask` is now copyable and self-sustaining after `Start()`, the base class can hold a copy for state queries
+   while the coroutine runs independently.
+4. When the coroutine completes, the base class reads the `EAbilitySuccessType` and calls `EndAbility()` with the
+   appropriate `bWasCancelled` flag.
+5. If GAS cancels the ability externally (e.g., stun, death), the base class calls `Cancel()` on the task. Expedited
+   cancellation ensures the coroutine stops immediately at the current awaiter (via `CancelAwaiter()`), rather than
+   waiting for the next natural `co_await`.
 
 ### EAbilitySuccessType
 
@@ -72,22 +77,22 @@ enum class EAbilitySuccessType : uint8
 
 Wraps GAS activation data for convenient access within the coroutine.
 
-| Method | Returns |
-|--------|---------|
-| `GetAvatarCharacter()` | `ACharacter*` (or nullptr) |
-| `GetOwningActor()` | `AActor*` |
+| Method                        | Returns                    |
+|-------------------------------|----------------------------|
+| `GetAvatarCharacter()`        | `ACharacter*` (or nullptr) |
+| `GetOwningActor()`            | `AActor*`                  |
 | `GetAbilitySystemComponent()` | `UAbilitySystemComponent*` |
-| `HasValidActorInfo()` | `bool` |
+| `HasValidActorInfo()`         | `bool`                     |
 
 Fields:
 
-| Field | Type |
-|-------|------|
-| `Handle` | `FGameplayAbilitySpecHandle` |
-| `ActorInfo` | `FGameplayAbilityActorInfo` |
-| `ActivationInfo` | `FGameplayAbilityActivationInfo` |
-| `TriggerEventData` | `FGameplayEventData` |
-| `bHasTriggerEventData` | `bool` |
+| Field                  | Type                             |
+|------------------------|----------------------------------|
+| `Handle`               | `FGameplayAbilitySpecHandle`     |
+| `ActorInfo`            | `FGameplayAbilityActorInfo`      |
+| `ActivationInfo`       | `FGameplayAbilityActivationInfo` |
+| `TriggerEventData`     | `FGameplayEventData`             |
+| `bHasTriggerEventData` | `bool`                           |
 
 ---
 
@@ -198,4 +203,3 @@ AsyncFlow::TTask<EAbilitySuccessType> UGA_HealingAura::ExecuteAbility(FAbilityPa
     co_return EAbilitySuccessType::Finished;
 }
 ```
-

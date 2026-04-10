@@ -26,8 +26,9 @@
 // rather than blocking threads. Multiple coroutines can wait on the same primitive
 // without blocking any threads.
 //
-// Thread-safe: Signal(), Reset(), and Release() can be called from any thread.
-// Waiters always resume on the game thread via AsyncTask(ENamedThreads::GameThread).
+// Thread-safe: Signal(), Reset(), Release(), and all co_await operations can be
+// called from any thread. Waiters resume on the game thread — inline when the
+// signal originates on the game thread, otherwise dispatched via AsyncTask.
 #pragma once
 
 #include "Async/Async.h"
@@ -43,16 +44,23 @@ namespace AsyncFlow
 {
 
 	// ============================================================================
-	// FAwaitableEvent — manual-reset event for coroutines
+	// FAwaitableEvent — manual-reset event for coroutines (thread-safe)
 	// ============================================================================
 
 	/**
-	 * Coroutine-compatible manual-reset event. Works like FEvent, but suspends
-	 * coroutines instead of blocking threads.
+	 * Thread-safe coroutine-compatible manual-reset event. Works like FEvent, but
+	 * suspends coroutines instead of blocking threads.
 	 *
 	 * When not signaled, co_await suspends the caller. When Signal() is called,
 	 * all waiting coroutines resume. Subsequent co_awaits resume immediately
 	 * until Reset() is called.
+	 *
+	 * All methods are thread-safe. Signal(), Reset(), and co_await may be called
+	 * from any thread. Waiters resume on the game thread (inline when signaled
+	 * from the game thread, otherwise dispatched via AsyncTask).
+	 *
+	 * The co_await FAwaiter satisfies the CancelableAwaiter concept, enabling
+	 * expedited cancellation when used inside a TTask.
 	 *
 	 * Non-copyable. Typically stored as a member of a component or system.
 	 *
@@ -74,7 +82,7 @@ namespace AsyncFlow
 		/**
 		 * @return true if the event is currently in the signaled state.
 		 * This is a relaxed-atomic read and may return a slightly stale value
-		 * when called concurrently with Signal()/Reset().
+		 * when called concurrently with Signal()/Reset(). Thread-safe.
 		 */
 		bool IsSignaled() const
 		{
@@ -83,8 +91,9 @@ namespace AsyncFlow
 
 		/**
 		 * Signal the event. All currently suspended coroutines resume on the
-		 * game thread. Subsequent co_awaits skip suspension until Reset().
-		 * Thread-safe — may be called from any thread.
+		 * game thread. If called from the game thread, waiters resume inline
+		 * (no dispatch overhead). Subsequent co_awaits skip suspension until
+		 * Reset(). Thread-safe — may be called from any thread.
 		 */
 		void Signal()
 		{
@@ -95,76 +104,83 @@ namespace AsyncFlow
 				LocalWaiters = MoveTemp(Waiters);
 			}
 
+			const bool bOnGameThread = IsInGameThread();
+
 			for (const FWaiterEntry& Entry : LocalWaiters)
 			{
 				const std::coroutine_handle<> Handle = Entry.Handle;
 
 				if (Entry.bHasAliveFlag)
 				{
-					// Protected path: only resume if the coroutine frame is still alive.
 					const TWeakPtr<bool> WeakAlive = Entry.AliveFlag;
-					AsyncTask(ENamedThreads::GameThread, [Handle, WeakAlive]() {
+					if (bOnGameThread)
+					{
 						if (const TSharedPtr<bool> Alive = WeakAlive.Pin(); Alive && *Alive)
 						{
 							Handle.resume();
 						}
-					});
+					}
+					else
+					{
+						AsyncTask(ENamedThreads::GameThread, [Handle, WeakAlive]() {
+							if (const TSharedPtr<bool> Alive = WeakAlive.Pin(); Alive && *Alive)
+							{
+								Handle.resume();
+							}
+						});
+					}
 				}
 				else
 				{
-					// Legacy path: no alive flag; check done() as a best-effort guard.
-					AsyncTask(ENamedThreads::GameThread, [Handle]() {
+					if (bOnGameThread)
+					{
 						if (Handle && !Handle.done())
 						{
 							Handle.resume();
 						}
-					});
+					}
+					else
+					{
+						AsyncTask(ENamedThreads::GameThread, [Handle]() {
+							if (Handle && !Handle.done())
+							{
+								Handle.resume();
+							}
+						});
+					}
 				}
 			}
 		}
 
 		/**
 		 * Reset the event to the non-signaled state.
-		 * Future co_awaits will suspend again.
-		 * Thread-safe — may be called from any thread.
+		 * Future co_awaits will suspend again. Thread-safe.
 		 */
 		void Reset()
 		{
 			bSignaled.store(false, std::memory_order_relaxed);
 		}
 
-		// co_await interface ---------------------------------------------------------
+		// Backward-compatible co_await interface (used by non-TTask coroutines
+		// and direct callers). TTask coroutines go through operator co_await()
+		// which returns an FAwaiter with CancelableAwaiter support.
 
-		/**
-		 * @return true if the event is already signaled. Called by the coroutine
-		 * machinery before await_suspend to fast-path already-signaled events.
-		 */
 		bool await_ready() const
 		{
 			return bSignaled.load(std::memory_order_relaxed);
 		}
 
-		/**
-		 * Suspend the coroutine. Called by TContractCheckAwaiter (via await_suspend_alive)
-		 * or directly by non-TTask coroutines (legacy path). Returns false if the event
-		 * was signaled in the window between await_ready and now.
-		 */
 		bool await_suspend(std::coroutine_handle<> Handle)
 		{
 			FScopeLock Lock(&CriticalSection);
 			if (bSignaled.load(std::memory_order_relaxed))
 			{
-				return false; // Signaled between await_ready and here — don't suspend
+				return false;
 			}
 			Waiters.Add({ Handle, TWeakPtr<bool>{}, false });
 			return true;
 		}
 
-		/**
-		 * Alive-flag-aware suspend. Called by TContractCheckAwaiter which holds the
-		 * alive flag for this co_await site. Signal() will not resume the handle once
-		 * the coroutine frame has been destroyed (alive flag set to false).
-		 */
 		bool await_suspend_alive(std::coroutine_handle<> Handle, TWeakPtr<bool> InAliveFlag)
 		{
 			FScopeLock Lock(&CriticalSection);
@@ -178,6 +194,79 @@ namespace AsyncFlow
 
 		void await_resume() const
 		{
+		}
+
+		// FAwaiter — per-co_await awaiter with CancelableAwaiter support --------
+
+		/**
+		 * Awaiter object returned by operator co_await(). Each co_await gets its
+		 * own FAwaiter instance which tracks the coroutine handle, enabling
+		 * CancelAwaiter() to remove a specific waiter from the queue.
+		 *
+		 * Satisfies the CancelableAwaiter concept for expedited cancellation.
+		 */
+		struct FAwaiter
+		{
+			FAwaitableEvent* Event = nullptr;
+			std::coroutine_handle<> Handle;
+			TWeakPtr<bool> Alive;
+
+			bool await_ready() const
+			{
+				return Event->bSignaled.load(std::memory_order_relaxed);
+			}
+
+			bool await_suspend(std::coroutine_handle<> H)
+			{
+				Handle = H;
+				return Event->await_suspend(H);
+			}
+
+			bool await_suspend_alive(std::coroutine_handle<> H, TWeakPtr<bool> InAliveFlag)
+			{
+				Handle = H;
+				Alive = InAliveFlag;
+				return Event->await_suspend_alive(H, MoveTemp(InAliveFlag));
+			}
+
+			void await_resume() const
+			{
+			}
+
+			/**
+			 * Cancel this awaiter: remove from the event's waiter queue and resume
+			 * the coroutine so it can process cancellation. Called by the TTask
+			 * cancel machinery. Thread-safe.
+			 */
+			void CancelAwaiter()
+			{
+				{
+					FScopeLock Lock(&Event->CriticalSection);
+					for (int32 i = 0; i < Event->Waiters.Num(); ++i)
+					{
+						if (Event->Waiters[i].Handle == Handle)
+						{
+							Event->Waiters.RemoveAt(i);
+							break;
+						}
+					}
+				}
+				if (IsInGameThread())
+				{
+					Handle.resume();
+				}
+				else
+				{
+					auto H = Handle;
+					AsyncTask(ENamedThreads::GameThread, [H]() { H.resume(); });
+				}
+			}
+		};
+
+		/** Returns a per-co_await FAwaiter with CancelableAwaiter support. */
+		FAwaiter operator co_await()
+		{
+			return FAwaiter{ this };
 		}
 
 	private:
@@ -194,18 +283,281 @@ namespace AsyncFlow
 	};
 
 	// ============================================================================
-	// FAwaitableSemaphore — counting semaphore for coroutines
+	// FAutoResetEvent — auto-reset event for coroutines (thread-safe)
+	// ============================================================================
+
+	/**
+	 * Thread-safe coroutine-compatible auto-reset event. Like a Windows
+	 * auto-reset event: Signal() wakes exactly one waiter. If no waiter is
+	 * queued, the next co_await passes through immediately and auto-resets.
+	 *
+	 * All methods are thread-safe. Signal(), Reset(), and co_await may be called
+	 * from any thread. The woken waiter resumes on the game thread (inline when
+	 * signaled from the game thread, otherwise dispatched via AsyncTask).
+	 *
+	 * The co_await FAwaiter satisfies the CancelableAwaiter concept, enabling
+	 * expedited cancellation when used inside a TTask.
+	 *
+	 * Non-copyable. Typically stored as a member.
+	 *
+	 * Usage:
+	 *   FAutoResetEvent NextStepReady;
+	 *
+	 *   // Producer (any thread):
+	 *   NextStepReady.Signal(); // wakes exactly one waiter
+	 *
+	 *   // Consumer coroutine:
+	 *   co_await NextStepReady; // suspends until Signal(), then auto-resets
+	 */
+	class FAutoResetEvent
+	{
+	public:
+		FAutoResetEvent() = default;
+		FAutoResetEvent(const FAutoResetEvent&) = delete;
+		FAutoResetEvent& operator=(const FAutoResetEvent&) = delete;
+
+		/**
+		 * Signal: wake exactly one waiting coroutine. If no waiter is queued,
+		 * set the event so the next co_await passes through immediately.
+		 * Thread-safe — may be called from any thread.
+		 */
+		void Signal()
+		{
+			std::coroutine_handle<> HandleToResume;
+			TWeakPtr<bool> LiveAlive;
+			bool bFoundWaiter = false;
+			bool bWaiterIsProtected = false;
+
+			{
+				FScopeLock Lock(&CriticalSection);
+
+				while (WaitingHandles.Num() > 0)
+				{
+					FWaiter& Front = WaitingHandles[0];
+
+					if (Front.bHasAliveFlag)
+					{
+						if (Front.AliveFlag.Pin())
+						{
+							HandleToResume = Front.Handle;
+							LiveAlive = Front.AliveFlag;
+							bFoundWaiter = true;
+							bWaiterIsProtected = true;
+							WaitingHandles.RemoveAt(0);
+							break;
+						}
+						// Dead protected entry: discard and try next
+						WaitingHandles.RemoveAt(0);
+					}
+					else
+					{
+						HandleToResume = Front.Handle;
+						bFoundWaiter = true;
+						bWaiterIsProtected = false;
+						WaitingHandles.RemoveAt(0);
+						break;
+					}
+				}
+
+				if (!bFoundWaiter)
+				{
+					// No live waiters — latch the signal for the next co_await
+					bSignaled.store(true, std::memory_order_relaxed);
+				}
+			}
+
+			if (bFoundWaiter)
+			{
+				const bool bOnGameThread = IsInGameThread();
+
+				if (bWaiterIsProtected)
+				{
+					if (bOnGameThread)
+					{
+						if (const TSharedPtr<bool> Alive = LiveAlive.Pin(); Alive && *Alive)
+						{
+							HandleToResume.resume();
+						}
+						else
+						{
+							Signal(); // Waiter died after dequeue — retry next
+						}
+					}
+					else
+					{
+						AsyncTask(ENamedThreads::GameThread, [HandleToResume, LiveAlive, this]() {
+							if (const TSharedPtr<bool> Alive = LiveAlive.Pin(); Alive && *Alive)
+							{
+								HandleToResume.resume();
+							}
+							else
+							{
+								this->Signal();
+							}
+						});
+					}
+				}
+				else
+				{
+					if (bOnGameThread)
+					{
+						if (HandleToResume && !HandleToResume.done())
+						{
+							HandleToResume.resume();
+						}
+					}
+					else
+					{
+						AsyncTask(ENamedThreads::GameThread, [HandleToResume]() {
+							if (HandleToResume && !HandleToResume.done())
+							{
+								HandleToResume.resume();
+							}
+						});
+					}
+				}
+			}
+		}
+
+		/**
+		 * Reset: clear the signaled state (manual use; normally auto-resets).
+		 * Thread-safe.
+		 */
+		void Reset()
+		{
+			bSignaled.store(false, std::memory_order_relaxed);
+		}
+
+		/**
+		 * @return true if the event is currently in the signaled state.
+		 * Diagnostic use. Thread-safe (relaxed-atomic read).
+		 */
+		bool IsSignaled() const
+		{
+			return bSignaled.load(std::memory_order_relaxed);
+		}
+
+		/**
+		 * Awaiter object returned by operator co_await(). Implements auto-reset
+		 * semantics: if the event is signaled, await_ready atomically consumes
+		 * the signal and returns true. Satisfies the CancelableAwaiter concept.
+		 */
+		struct FAwaiter
+		{
+			FAutoResetEvent* Event = nullptr;
+			std::coroutine_handle<> Handle;
+			TWeakPtr<bool> Alive;
+
+			bool await_ready()
+			{
+				// Atomically consume the signal if set (auto-reset)
+				bool Expected = true;
+				return Event->bSignaled.compare_exchange_strong(
+					Expected, false, std::memory_order_acquire, std::memory_order_relaxed);
+			}
+
+			bool await_suspend(std::coroutine_handle<> H)
+			{
+				Handle = H;
+				FScopeLock Lock(&Event->CriticalSection);
+				// Double-check: signal may have arrived between await_ready and here
+				bool Expected = true;
+				if (Event->bSignaled.compare_exchange_strong(
+						Expected, false, std::memory_order_acquire, std::memory_order_relaxed))
+				{
+					return false; // Consumed signal — don't suspend
+				}
+				Event->WaitingHandles.Add({ H, TWeakPtr<bool>{}, false });
+				return true;
+			}
+
+			bool await_suspend_alive(std::coroutine_handle<> H, TWeakPtr<bool> InAlive)
+			{
+				Handle = H;
+				Alive = InAlive;
+				FScopeLock Lock(&Event->CriticalSection);
+				bool Expected = true;
+				if (Event->bSignaled.compare_exchange_strong(
+						Expected, false, std::memory_order_acquire, std::memory_order_relaxed))
+				{
+					return false;
+				}
+				Event->WaitingHandles.Add({ H, MoveTemp(InAlive), true });
+				return true;
+			}
+
+			void await_resume() const
+			{
+			}
+
+			/**
+			 * Cancel this awaiter: remove from the queue and resume the coroutine
+			 * so it can process cancellation. Thread-safe.
+			 */
+			void CancelAwaiter()
+			{
+				{
+					FScopeLock Lock(&Event->CriticalSection);
+					for (int32 i = 0; i < Event->WaitingHandles.Num(); ++i)
+					{
+						if (Event->WaitingHandles[i].Handle == Handle)
+						{
+							Event->WaitingHandles.RemoveAt(i);
+							break;
+						}
+					}
+				}
+				if (IsInGameThread())
+				{
+					Handle.resume();
+				}
+				else
+				{
+					auto H = Handle;
+					AsyncTask(ENamedThreads::GameThread, [H]() { H.resume(); });
+				}
+			}
+		};
+
+		FAwaiter operator co_await()
+		{
+			return FAwaiter{ this };
+		}
+
+	private:
+		mutable FCriticalSection CriticalSection;
+		std::atomic<bool> bSignaled{ false };
+
+		struct FWaiter
+		{
+			std::coroutine_handle<> Handle;
+			TWeakPtr<bool> AliveFlag;
+			bool bHasAliveFlag;
+		};
+		TArray<FWaiter> WaitingHandles;
+	};
+
+	// ============================================================================
+	// FAwaitableSemaphore — counting semaphore for coroutines (thread-safe)
 	// ============================================================================
 
 	// Forward-declared so FAcquireGuardedAwaiter can be a friend.
 	struct FAcquireGuardedAwaiter;
 
 	/**
-	 * Coroutine-compatible counting semaphore. Controls concurrent access
-	 * to a limited resource without blocking threads.
+	 * Thread-safe coroutine-compatible counting semaphore. Controls concurrent
+	 * access to a limited resource without blocking threads.
 	 *
 	 * Construct with a maximum count. co_await acquires one permit (suspends
-	 * if none available). Release() returns a permit and resumes one waiter.
+	 * if none available). Release() returns one or more permits and resumes
+	 * waiting coroutines.
+	 *
+	 * All methods are thread-safe. Release(), co_await, and GetAvailable() may
+	 * be called from any thread. Waiters resume on the game thread (inline when
+	 * released from the game thread, otherwise dispatched via AsyncTask).
+	 *
+	 * The co_await FAwaiter satisfies the CancelableAwaiter concept, enabling
+	 * expedited cancellation when used inside a TTask.
 	 *
 	 * Non-copyable. Typically stored as a member to rate-limit operations.
 	 *
@@ -218,6 +570,8 @@ namespace AsyncFlow
 	 *   co_await LoadSlots; // acquires a slot (suspends if all 3 are in use)
 	 *   auto* Obj = co_await AsyncFlow::AsyncLoadObject(SoftPtr);
 	 *   LoadSlots.Release(); // frees the slot for other waiters
+	 *
+	 *   LoadSlots.Release(2); // batch-release 2 slots at once
 	 */
 	struct FAwaitableSemaphore
 	{
@@ -238,7 +592,7 @@ namespace AsyncFlow
 		/**
 		 * @return the number of currently available permits.
 		 * This is a relaxed-atomic read and may reflect a slightly stale count
-		 * when called concurrently with acquire/release operations.
+		 * when called concurrently with acquire/release operations. Thread-safe.
 		 */
 		int32 GetAvailable() const
 		{
@@ -246,9 +600,15 @@ namespace AsyncFlow
 		}
 
 		/**
-		 * Return one permit. Resumes the oldest live waiting coroutine, if any.
-		 * Dead waiters (frames destroyed while queued) are skipped automatically.
-		 * If no live waiters remain, the permit count is decremented.
+		 * Return one or more permits. For each permit, resumes the oldest live
+		 * waiting coroutine. Dead waiters (frames destroyed while queued) are
+		 * skipped automatically. If no live waiters remain for a permit, the
+		 * permit count is decremented.
+		 *
+		 * If called from the game thread, waiters resume inline (no dispatch
+		 * overhead). Otherwise dispatched via AsyncTask.
+		 *
+		 * @param Count  Number of permits to release. Must be >= 1.
 		 *
 		 * @warning Calling Release() more times than permits were acquired triggers
 		 *          an ensure.
@@ -256,41 +616,41 @@ namespace AsyncFlow
 		 *          Release(). Destroying the semaphore while callbacks are in flight
 		 *          is a programming error.
 		 */
-		void Release()
+		void Release(int32 Count = 1)
 		{
-			std::coroutine_handle<> HandleToResume;
-			TWeakPtr<bool> LiveAlive;
-			bool bFoundWaiter = false;
-			bool bWaiterIsProtected = false;
+			check(Count >= 1);
+
+			struct FResumeInfo
+			{
+				std::coroutine_handle<> Handle;
+				TWeakPtr<bool> AliveFlag;
+				bool bIsProtected;
+			};
+			TArray<FResumeInfo> ToResume;
 
 			{
 				FScopeLock Lock(&CriticalSection);
 
-				// Walk the queue from the head, skipping dead protected waiters.
-				while (WaiterHead < Waiters.Num())
+				int32 Remaining = Count;
+
+				// Walk the queue from the head, handing permits to live waiters.
+				while (Remaining > 0 && WaiterHead < Waiters.Num())
 				{
 					FWaiterEntry& Entry = Waiters[WaiterHead++];
 
 					if (Entry.bHasAliveFlag)
 					{
-						// Protected entry: only hand permit if the frame is still alive.
 						if (Entry.AliveFlag.Pin())
 						{
-							HandleToResume = Entry.Handle;
-							LiveAlive = Entry.AliveFlag;
-							bFoundWaiter = true;
-							bWaiterIsProtected = true;
-							break;
+							ToResume.Add({ Entry.Handle, Entry.AliveFlag, true });
+							--Remaining;
 						}
-						// Dead protected entry: no permit was counted for it — skip.
+						// Dead protected entry: no permit was counted — skip.
 					}
 					else
 					{
-						// Legacy unprotected entry: always hand the permit.
-						HandleToResume = Entry.Handle;
-						bFoundWaiter = true;
-						bWaiterIsProtected = false;
-						break;
+						ToResume.Add({ Entry.Handle, TWeakPtr<bool>{}, false });
+						--Remaining;
 					}
 				}
 
@@ -301,50 +661,76 @@ namespace AsyncFlow
 					WaiterHead = 0;
 				}
 
-				if (!bFoundWaiter)
+				// Free permits that weren't handed to waiters.
+				if (Remaining > 0)
 				{
-					// No waiter to hand the permit to — truly free it.
-					CurrentCount.fetch_sub(1, std::memory_order_relaxed);
+					CurrentCount.fetch_sub(Remaining, std::memory_order_relaxed);
 					ensureMsgf(
 						CurrentCount.load(std::memory_order_relaxed) >= 0,
 						TEXT("FAwaitableSemaphore::Release() called more times than acquired"));
 				}
-				// If bFoundWaiter: permit passes to waiter; CurrentCount unchanged.
 			}
 
-			if (bFoundWaiter)
+			const bool bOnGameThread = IsInGameThread();
+
+			for (const FResumeInfo& Info : ToResume)
 			{
-				if (bWaiterIsProtected)
+				if (Info.bIsProtected)
 				{
-					// Protected path: check alive flag on the game thread.
-					// NOTE: 'this' must remain valid until the callback runs.
-					AsyncTask(ENamedThreads::GameThread, [HandleToResume, LiveAlive, this]() {
-						if (const TSharedPtr<bool> Alive = LiveAlive.Pin(); Alive && *Alive)
+					if (bOnGameThread)
+					{
+						if (const TSharedPtr<bool> Alive = Info.AliveFlag.Pin(); Alive && *Alive)
 						{
-							HandleToResume.resume();
+							Info.Handle.resume();
 						}
 						else
 						{
-							// Waiter died after Release() already "gave" it the permit.
-							// Return the permit by releasing again.
-							this->Release();
+							// Waiter died after we "gave" it the permit — bounce back.
+							Release();
 						}
-					});
+					}
+					else
+					{
+						auto H = Info.Handle;
+						auto WeakAlive = Info.AliveFlag;
+						AsyncTask(ENamedThreads::GameThread, [H, WeakAlive, this]() {
+							if (const TSharedPtr<bool> Alive = WeakAlive.Pin(); Alive && *Alive)
+							{
+								H.resume();
+							}
+							else
+							{
+								this->Release();
+							}
+						});
+					}
 				}
 				else
 				{
-					// Legacy path: resume if not already done.
-					AsyncTask(ENamedThreads::GameThread, [HandleToResume]() {
-						if (HandleToResume && !HandleToResume.done())
+					if (bOnGameThread)
+					{
+						if (Info.Handle && !Info.Handle.done())
 						{
-							HandleToResume.resume();
+							Info.Handle.resume();
 						}
-					});
+					}
+					else
+					{
+						auto H = Info.Handle;
+						AsyncTask(ENamedThreads::GameThread, [H]() {
+							if (H && !H.done())
+							{
+								H.resume();
+							}
+						});
+					}
 				}
 			}
 		}
 
-		// co_await interface ---------------------------------------------------------
+		// Backward-compatible co_await interface (used by non-TTask coroutines
+		// and direct callers). TTask coroutines go through operator co_await()
+		// which returns an FAwaiter with CancelableAwaiter support.
 
 		/** Always returns false — acquisition is done atomically inside await_suspend. */
 		bool await_ready() const
@@ -352,26 +738,18 @@ namespace AsyncFlow
 			return false;
 		}
 
-		/**
-		 * Acquire one permit under the lock. If permits are available, acquires
-		 * immediately (returns false = don't suspend). Otherwise queues the handle.
-		 */
 		bool await_suspend(std::coroutine_handle<> Handle)
 		{
 			FScopeLock Lock(&CriticalSection);
 			if (CurrentCount.load(std::memory_order_relaxed) < MaxCount)
 			{
 				CurrentCount.fetch_add(1, std::memory_order_relaxed);
-				return false; // Acquired — don't suspend
+				return false;
 			}
 			Waiters.Add({ Handle, TWeakPtr<bool>{}, false });
 			return true;
 		}
 
-		/**
-		 * Alive-flag-aware acquire. Called by TContractCheckAwaiter.
-		 * Release() will not resume the handle once the frame is destroyed.
-		 */
 		bool await_suspend_alive(std::coroutine_handle<> Handle, TWeakPtr<bool> InAliveFlag)
 		{
 			FScopeLock Lock(&CriticalSection);
@@ -386,6 +764,77 @@ namespace AsyncFlow
 
 		void await_resume()
 		{
+		}
+
+		// FAwaiter — per-co_await awaiter with CancelableAwaiter support --------
+
+		/**
+		 * Awaiter object returned by operator co_await(). Tracks the coroutine
+		 * handle so CancelAwaiter() can remove a specific waiter from the queue.
+		 * Satisfies the CancelableAwaiter concept.
+		 */
+		struct FAwaiter
+		{
+			FAwaitableSemaphore* Semaphore = nullptr;
+			std::coroutine_handle<> Handle;
+			TWeakPtr<bool> Alive;
+
+			bool await_ready() const
+			{
+				return false;
+			}
+
+			bool await_suspend(std::coroutine_handle<> H)
+			{
+				Handle = H;
+				return Semaphore->await_suspend(H);
+			}
+
+			bool await_suspend_alive(std::coroutine_handle<> H, TWeakPtr<bool> InAliveFlag)
+			{
+				Handle = H;
+				Alive = InAliveFlag;
+				return Semaphore->await_suspend_alive(H, MoveTemp(InAliveFlag));
+			}
+
+			void await_resume()
+			{
+			}
+
+			/**
+			 * Cancel this awaiter: remove from the semaphore's waiter queue and
+			 * resume the coroutine so it can process cancellation. The waiter
+			 * never acquired a permit, so no permit accounting changes. Thread-safe.
+			 */
+			void CancelAwaiter()
+			{
+				{
+					FScopeLock Lock(&Semaphore->CriticalSection);
+					for (int32 i = Semaphore->WaiterHead; i < Semaphore->Waiters.Num(); ++i)
+					{
+						if (Semaphore->Waiters[i].Handle == Handle)
+						{
+							Semaphore->Waiters.RemoveAt(i);
+							break;
+						}
+					}
+				}
+				if (IsInGameThread())
+				{
+					Handle.resume();
+				}
+				else
+				{
+					auto H = Handle;
+					AsyncTask(ENamedThreads::GameThread, [H]() { H.resume(); });
+				}
+			}
+		};
+
+		/** Returns a per-co_await FAwaiter with CancelableAwaiter support. */
+		FAwaiter operator co_await()
+		{
+			return FAwaiter{ this };
 		}
 
 	private:
@@ -486,6 +935,8 @@ namespace AsyncFlow
 	 * Combines co_await + RAII in one step. Uses the alive-flag-aware path so
 	 * Release() does not touch a destroyed coroutine frame.
 	 *
+	 * Satisfies the CancelableAwaiter concept for expedited cancellation.
+	 *
 	 * Usage:
 	 *   auto Guard = co_await AsyncFlow::AcquireGuarded(Semaphore);
 	 *   // permit held; released automatically when Guard goes out of scope
@@ -493,27 +944,57 @@ namespace AsyncFlow
 	struct FAcquireGuardedAwaiter
 	{
 		FAwaitableSemaphore& Semaphore;
+		std::coroutine_handle<> Handle;
 
 		bool await_ready() const
 		{
 			return false;
 		}
 
-		// Delegates to the semaphore's own await_suspend/await_suspend_alive.
-		// TContractCheckAwaiter wraps this and provides the alive flag.
-		bool await_suspend(std::coroutine_handle<> Handle)
+		bool await_suspend(std::coroutine_handle<> H)
 		{
-			return Semaphore.await_suspend(Handle);
+			Handle = H;
+			return Semaphore.await_suspend(H);
 		}
 
-		bool await_suspend_alive(std::coroutine_handle<> Handle, TWeakPtr<bool> InAliveFlag)
+		bool await_suspend_alive(std::coroutine_handle<> H, TWeakPtr<bool> InAliveFlag)
 		{
-			return Semaphore.await_suspend_alive(Handle, MoveTemp(InAliveFlag));
+			Handle = H;
+			return Semaphore.await_suspend_alive(H, MoveTemp(InAliveFlag));
 		}
 
 		FSemaphoreGuard await_resume()
 		{
 			return FSemaphoreGuard(Semaphore);
+		}
+
+		/**
+		 * Cancel this awaiter: remove from the semaphore's waiter queue and
+		 * resume the coroutine so it can process cancellation. The waiter
+		 * never acquired a permit, so no permit accounting changes. Thread-safe.
+		 */
+		void CancelAwaiter()
+		{
+			{
+				FScopeLock Lock(&Semaphore.CriticalSection);
+				for (int32 i = Semaphore.WaiterHead; i < Semaphore.Waiters.Num(); ++i)
+				{
+					if (Semaphore.Waiters[i].Handle == Handle)
+					{
+						Semaphore.Waiters.RemoveAt(i);
+						break;
+					}
+				}
+			}
+			if (IsInGameThread())
+			{
+				Handle.resume();
+			}
+			else
+			{
+				auto H = Handle;
+				AsyncTask(ENamedThreads::GameThread, [H]() { H.resume(); });
+			}
 		}
 	};
 

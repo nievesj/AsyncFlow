@@ -5,6 +5,13 @@
 These awaiters wrap common UE engine systems. Each has a dedicated header to avoid pulling heavy engine dependencies
 into every translation unit.
 
+> **v2 changes:**
+> - **Optional world context:** Timeline and tick-based awaiters in this module no longer require an explicit `UObject*`
+    context. World is auto-resolved (explicit → latent mode → `GEngine->GetCurrentPlayWorld()`). Old signatures still
+    compile but are deprecated.
+> - **Implicit awaiting:** `TFuture<T>`, `UE::Tasks::TTask<T>`, and multicast/unicast delegates are directly `co_await`
+    -able without wrapper functions (see [Threading](Threading.md) and [CoreModule](CoreModule.md) for details).
+
 ---
 
 ## Asset Loading
@@ -330,7 +337,16 @@ if (Save)
 ### Timeline
 
 Per-tick interpolation from one value to another over a duration. Calls the update callback each frame with the
-interpolated value.
+interpolated value. World context is optional — auto-resolved when omitted.
+
+```cpp
+co_await AsyncFlow::Timeline(0.0f, 1.0f, 0.5f, [this](float Alpha)
+{
+    DynamicMaterial->SetScalarParameterValue(TEXT("Opacity"), Alpha);
+});
+```
+
+<details><summary>Deprecated signature (still compiles)</summary>
 
 ```cpp
 co_await AsyncFlow::Timeline(this, 0.0f, 1.0f, 0.5f, [this](float Alpha)
@@ -339,24 +355,42 @@ co_await AsyncFlow::Timeline(this, 0.0f, 1.0f, 0.5f, [this](float Alpha)
 });
 ```
 
+</details>
+
 ### RealTimeline / UnpausedTimeline
 
 Same as Timeline but uses wall-clock time instead of game time. Runs during pause.
 
 ```cpp
-co_await AsyncFlow::RealTimeline(this, 0.0f, 1.0f, 0.3f, [this](float Alpha)
+co_await AsyncFlow::RealTimeline(0.0f, 1.0f, 0.3f, [this](float Alpha)
 {
     SetWidgetOpacity(Alpha);
 });
 ```
+
+<details><summary>Deprecated signature</summary>
+
+```cpp
+co_await AsyncFlow::RealTimeline(this, 0.0f, 1.0f, 0.3f, Callback);
+```
+
+</details>
 
 ### AudioTimeline
 
 Uses real time as a proxy for audio time.
 
 ```cpp
+co_await AsyncFlow::AudioTimeline(0.0f, 1.0f, 1.0f, Callback);
+```
+
+<details><summary>Deprecated signature</summary>
+
+```cpp
 co_await AsyncFlow::AudioTimeline(this, 0.0f, 1.0f, 1.0f, Callback);
 ```
+
+</details>
 
 ### MoveComponentTo
 
@@ -390,4 +424,3 @@ Play a UMG widget animation and wait for it to finish. Only available if UMG is 
 ```cpp
 co_await AsyncFlow::PlayWidgetAnimationAndWait(MyWidget, FadeInAnimation);
 ```
-

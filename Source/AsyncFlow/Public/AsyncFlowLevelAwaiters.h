@@ -61,8 +61,8 @@ namespace AsyncFlow
 
 	/**
  * Awaiter that loads a streaming level by name. Wraps
- * UGameplayStatics::LoadStreamLevelBySoftObjectPtr via the latent action
- * bridge. Resumes when the level is fully loaded and visible.
+ * UGameplayStatics::LoadStreamLevel via a condition-polling bridge.
+ * Resumes when the level is fully loaded (and visible, if requested).
  *
  * If WorldContext is null, resumes immediately (no level loads).
  */

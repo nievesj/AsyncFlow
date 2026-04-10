@@ -22,10 +22,11 @@
 
 // AsyncFlowAwaiters.h — Core timing and flow control awaiters
 //
-// All awaiters in this file are game-thread-only and require a world context
-// (UObject*) to access the UAsyncFlowTickSubsystem for scheduling. If the
-// world or subsystem is unavailable, the awaiter resumes immediately to
-// prevent a permanent hang.
+// All awaiters in this file are game-thread-only and use a world context
+// (UObject*) to access the UAsyncFlowTickSubsystem for scheduling. In latent
+// mode, the world context is resolved automatically via
+// Private::GetCurrentWorldContext(). If both the explicit and thread-local
+// contexts are null, the awaiter resumes immediately to prevent a permanent hang.
 #pragma once
 
 #include "AsyncFlowTask.h"
@@ -104,9 +105,11 @@ namespace AsyncFlow
  */
 	struct FDelayAwaiter
 	{
-		UObject* WorldContext = nullptr;
+		TWeakObjectPtr<UObject> WorldContext;
 		float Seconds = 0.0f;
 		Private::FAwaiterAliveFlag AliveFlag;
+		mutable std::coroutine_handle<> StoredHandle;
+		mutable UAsyncFlowTickSubsystem* StoredSubsystem = nullptr;
 
 		FDelayAwaiter() = default;
 		FDelayAwaiter(FDelayAwaiter&&) noexcept = default;
@@ -121,20 +124,38 @@ namespace AsyncFlow
 
 		void await_suspend(std::coroutine_handle<> Handle) const
 		{
-			if (!WorldContext || !WorldContext->GetWorld())
+			UObject* ResolvedCtx = WorldContext.Get();
+			if (!ResolvedCtx || !ResolvedCtx->GetWorld())
 			{
 				UE_LOG(LogAsyncFlow, Warning, TEXT("Delay: null WorldContext or World — resuming immediately"));
 				Handle.resume();
 				return;
 			}
-			UAsyncFlowTickSubsystem* Subsystem = WorldContext->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
+			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
 			if (Subsystem)
 			{
+				StoredHandle = Handle;
+				StoredSubsystem = Subsystem;
 				Subsystem->ScheduleDelay(Handle, Seconds, AliveFlag.Get());
 			}
 			else
 			{
 				Handle.resume();
+			}
+		}
+
+		void CancelAwaiter()
+		{
+			if (StoredHandle)
+			{
+				if (StoredSubsystem)
+				{
+					StoredSubsystem->CancelHandle(StoredHandle);
+					StoredSubsystem = nullptr;
+				}
+				auto H = StoredHandle;
+				StoredHandle = nullptr;
+				H.resume();
 			}
 		}
 
@@ -146,16 +167,22 @@ namespace AsyncFlow
 	/**
  * Suspend for Seconds of dilated game time.
  *
- * @param WorldContext  Any UObject with a valid GetWorld() (actor, component, etc.).
  * @param Seconds      Duration in game-dilated seconds. Values <= 0 resume immediately.
+ * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
  * @return             An awaiter — use with co_await.
  */
-	[[nodiscard]] inline FDelayAwaiter Delay(UObject* WorldContext, float Seconds)
+	[[nodiscard]] inline FDelayAwaiter Delay(float Seconds, UObject* WorldContext = nullptr)
 	{
 		FDelayAwaiter Aw;
-		Aw.WorldContext = WorldContext;
+		Aw.WorldContext = WorldContext ? WorldContext : Private::GetCurrentWorldContext();
 		Aw.Seconds = Seconds;
 		return Aw;
+	}
+
+	/** @deprecated Use Delay(Seconds) or Delay(Seconds, WorldContext) instead. */
+	[[deprecated("Use Delay(Seconds) or Delay(Seconds, WorldContext)")]] [[nodiscard]] inline FDelayAwaiter Delay(UObject* WorldContext, float Seconds)
+	{
+		return Delay(Seconds, WorldContext);
 	}
 
 	// ============================================================================
@@ -168,9 +195,11 @@ namespace AsyncFlow
  */
 	struct FRealDelayAwaiter
 	{
-		UObject* WorldContext = nullptr;
+		TWeakObjectPtr<UObject> WorldContext;
 		float Seconds = 0.0f;
 		Private::FAwaiterAliveFlag AliveFlag;
+		mutable std::coroutine_handle<> StoredHandle;
+		mutable UAsyncFlowTickSubsystem* StoredSubsystem = nullptr;
 
 		FRealDelayAwaiter() = default;
 		FRealDelayAwaiter(FRealDelayAwaiter&&) noexcept = default;
@@ -185,20 +214,38 @@ namespace AsyncFlow
 
 		void await_suspend(std::coroutine_handle<> Handle) const
 		{
-			if (!WorldContext || !WorldContext->GetWorld())
+			UObject* ResolvedCtx = WorldContext.Get();
+			if (!ResolvedCtx || !ResolvedCtx->GetWorld())
 			{
 				UE_LOG(LogAsyncFlow, Warning, TEXT("RealDelay: null WorldContext or World — resuming immediately"));
 				Handle.resume();
 				return;
 			}
-			UAsyncFlowTickSubsystem* Subsystem = WorldContext->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
+			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
 			if (Subsystem)
 			{
+				StoredHandle = Handle;
+				StoredSubsystem = Subsystem;
 				Subsystem->ScheduleRealDelay(Handle, Seconds, AliveFlag.Get());
 			}
 			else
 			{
 				Handle.resume();
+			}
+		}
+
+		void CancelAwaiter()
+		{
+			if (StoredHandle)
+			{
+				if (StoredSubsystem)
+				{
+					StoredSubsystem->CancelHandle(StoredHandle);
+					StoredSubsystem = nullptr;
+				}
+				auto H = StoredHandle;
+				StoredHandle = nullptr;
+				H.resume();
 			}
 		}
 
@@ -210,16 +257,22 @@ namespace AsyncFlow
 	/**
  * Suspend for Seconds of real wall-clock time. Ignores pause and dilation.
  *
- * @param WorldContext  Any UObject with a valid GetWorld().
  * @param Seconds      Duration in real seconds.
+ * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
  * @return             An awaiter — use with co_await.
  */
-	[[nodiscard]] inline FRealDelayAwaiter RealDelay(UObject* WorldContext, float Seconds)
+	[[nodiscard]] inline FRealDelayAwaiter RealDelay(float Seconds, UObject* WorldContext = nullptr)
 	{
 		FRealDelayAwaiter Aw;
-		Aw.WorldContext = WorldContext;
+		Aw.WorldContext = WorldContext ? WorldContext : Private::GetCurrentWorldContext();
 		Aw.Seconds = Seconds;
 		return Aw;
+	}
+
+	/** @deprecated Use RealDelay(Seconds) or RealDelay(Seconds, WorldContext) instead. */
+	[[deprecated("Use RealDelay(Seconds) or RealDelay(Seconds, WorldContext)")]] [[nodiscard]] inline FRealDelayAwaiter RealDelay(UObject* WorldContext, float Seconds)
+	{
+		return RealDelay(Seconds, WorldContext);
 	}
 
 	// ============================================================================
@@ -232,8 +285,10 @@ namespace AsyncFlow
  */
 	struct FNextTickAwaiter
 	{
-		UObject* WorldContext = nullptr;
+		TWeakObjectPtr<UObject> WorldContext;
 		Private::FAwaiterAliveFlag AliveFlag;
+		mutable std::coroutine_handle<> StoredHandle;
+		mutable UAsyncFlowTickSubsystem* StoredSubsystem = nullptr;
 
 		FNextTickAwaiter() = default;
 		FNextTickAwaiter(FNextTickAwaiter&&) noexcept = default;
@@ -248,20 +303,38 @@ namespace AsyncFlow
 
 		void await_suspend(std::coroutine_handle<> Handle) const
 		{
-			if (!WorldContext || !WorldContext->GetWorld())
+			UObject* ResolvedCtx = WorldContext.Get();
+			if (!ResolvedCtx || !ResolvedCtx->GetWorld())
 			{
 				UE_LOG(LogAsyncFlow, Warning, TEXT("NextTick: null WorldContext or World — resuming immediately"));
 				Handle.resume();
 				return;
 			}
-			UAsyncFlowTickSubsystem* Subsystem = WorldContext->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
+			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
 			if (Subsystem)
 			{
+				StoredHandle = Handle;
+				StoredSubsystem = Subsystem;
 				Subsystem->ScheduleTicks(Handle, 1, AliveFlag.Get());
 			}
 			else
 			{
 				Handle.resume();
+			}
+		}
+
+		void CancelAwaiter()
+		{
+			if (StoredHandle)
+			{
+				if (StoredSubsystem)
+				{
+					StoredSubsystem->CancelHandle(StoredHandle);
+					StoredSubsystem = nullptr;
+				}
+				auto H = StoredHandle;
+				StoredHandle = nullptr;
+				H.resume();
 			}
 		}
 
@@ -273,13 +346,13 @@ namespace AsyncFlow
 	/**
  * Suspend until the next game tick.
  *
- * @param WorldContext  Any UObject with a valid GetWorld().
+ * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
  * @return             An awaiter — use with co_await.
  */
-	[[nodiscard]] inline FNextTickAwaiter NextTick(UObject* WorldContext)
+	[[nodiscard]] inline FNextTickAwaiter NextTick(UObject* WorldContext = nullptr)
 	{
 		FNextTickAwaiter Aw;
-		Aw.WorldContext = WorldContext;
+		Aw.WorldContext = WorldContext ? WorldContext : Private::GetCurrentWorldContext();
 		return Aw;
 	}
 
@@ -293,9 +366,11 @@ namespace AsyncFlow
  */
 	struct FTicksAwaiter
 	{
-		UObject* WorldContext = nullptr;
+		TWeakObjectPtr<UObject> WorldContext;
 		int32 NumTicks = 0;
 		Private::FAwaiterAliveFlag AliveFlag;
+		mutable std::coroutine_handle<> StoredHandle;
+		mutable UAsyncFlowTickSubsystem* StoredSubsystem = nullptr;
 
 		FTicksAwaiter() = default;
 		FTicksAwaiter(FTicksAwaiter&&) noexcept = default;
@@ -310,20 +385,38 @@ namespace AsyncFlow
 
 		void await_suspend(std::coroutine_handle<> Handle) const
 		{
-			if (!WorldContext || !WorldContext->GetWorld())
+			UObject* ResolvedCtx = WorldContext.Get();
+			if (!ResolvedCtx || !ResolvedCtx->GetWorld())
 			{
 				UE_LOG(LogAsyncFlow, Warning, TEXT("Ticks: null WorldContext or World — resuming immediately"));
 				Handle.resume();
 				return;
 			}
-			UAsyncFlowTickSubsystem* Subsystem = WorldContext->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
+			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
 			if (Subsystem)
 			{
+				StoredHandle = Handle;
+				StoredSubsystem = Subsystem;
 				Subsystem->ScheduleTicks(Handle, NumTicks, AliveFlag.Get());
 			}
 			else
 			{
 				Handle.resume();
+			}
+		}
+
+		void CancelAwaiter()
+		{
+			if (StoredHandle)
+			{
+				if (StoredSubsystem)
+				{
+					StoredSubsystem->CancelHandle(StoredHandle);
+					StoredSubsystem = nullptr;
+				}
+				auto H = StoredHandle;
+				StoredHandle = nullptr;
+				H.resume();
 			}
 		}
 
@@ -335,16 +428,22 @@ namespace AsyncFlow
 	/**
  * Suspend for InNumTicks game ticks.
  *
- * @param WorldContext  Any UObject with a valid GetWorld().
  * @param InNumTicks   Number of ticks to wait. Clamped to at least 1 in the subsystem.
+ * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
  * @return             An awaiter — use with co_await.
  */
-	[[nodiscard]] inline FTicksAwaiter Ticks(UObject* WorldContext, int32 InNumTicks)
+	[[nodiscard]] inline FTicksAwaiter Ticks(int32 InNumTicks, UObject* WorldContext = nullptr)
 	{
 		FTicksAwaiter Aw;
-		Aw.WorldContext = WorldContext;
+		Aw.WorldContext = WorldContext ? WorldContext : Private::GetCurrentWorldContext();
 		Aw.NumTicks = InNumTicks;
 		return Aw;
+	}
+
+	/** @deprecated Use Ticks(NumTicks) or Ticks(NumTicks, WorldContext) instead. */
+	[[deprecated("Use Ticks(NumTicks) or Ticks(NumTicks, WorldContext)")]] [[nodiscard]] inline FTicksAwaiter Ticks(UObject* WorldContext, int32 InNumTicks)
+	{
+		return Ticks(InNumTicks, WorldContext);
 	}
 
 	// ============================================================================
@@ -361,9 +460,11 @@ namespace AsyncFlow
  */
 	struct FConditionAwaiter
 	{
-		UObject* Context = nullptr;
+		TWeakObjectPtr<UObject> Context;
 		TFunction<bool()> Predicate;
 		Private::FAwaiterAliveFlag AliveFlag;
+		mutable std::coroutine_handle<> StoredHandle;
+		mutable UAsyncFlowTickSubsystem* StoredSubsystem = nullptr;
 
 		FConditionAwaiter() = default;
 		FConditionAwaiter(FConditionAwaiter&&) noexcept = default;
@@ -378,20 +479,38 @@ namespace AsyncFlow
 
 		void await_suspend(std::coroutine_handle<> Handle) const
 		{
-			if (!Context || !Context->GetWorld())
+			UObject* ResolvedCtx = Context.Get();
+			if (!ResolvedCtx || !ResolvedCtx->GetWorld())
 			{
 				UE_LOG(LogAsyncFlow, Warning, TEXT("WaitForCondition: null Context or World — resuming immediately"));
 				Handle.resume();
 				return;
 			}
-			UAsyncFlowTickSubsystem* Subsystem = Context->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
+			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
 			if (Subsystem)
 			{
-				Subsystem->ScheduleCondition(Handle, Context, Predicate, AliveFlag.Get());
+				StoredHandle = Handle;
+				StoredSubsystem = Subsystem;
+				Subsystem->ScheduleCondition(Handle, ResolvedCtx, Predicate, AliveFlag.Get());
 			}
 			else
 			{
 				Handle.resume();
+			}
+		}
+
+		void CancelAwaiter()
+		{
+			if (StoredHandle)
+			{
+				if (StoredSubsystem)
+				{
+					StoredSubsystem->CancelHandle(StoredHandle);
+					StoredSubsystem = nullptr;
+				}
+				auto H = StoredHandle;
+				StoredHandle = nullptr;
+				H.resume();
 			}
 		}
 
@@ -403,16 +522,22 @@ namespace AsyncFlow
 	/**
  * Suspend until InPredicate returns true. Evaluated once per tick.
  *
- * @param InContext     UObject for world access and lifetime tracking.
  * @param InPredicate  Callable returning bool. Must be safe to call from the game thread.
+ * @param InContext     UObject for world access and lifetime tracking. Optional in latent mode.
  * @return             An awaiter — use with co_await.
  */
-	[[nodiscard]] inline FConditionAwaiter WaitForCondition(UObject* InContext, TFunction<bool()> InPredicate)
+	[[nodiscard]] inline FConditionAwaiter WaitForCondition(TFunction<bool()> InPredicate, UObject* InContext = nullptr)
 	{
 		FConditionAwaiter Aw;
-		Aw.Context = InContext;
+		Aw.Context = InContext ? InContext : Private::GetCurrentWorldContext();
 		Aw.Predicate = MoveTemp(InPredicate);
 		return Aw;
+	}
+
+	/** @deprecated Use WaitForCondition(Predicate) or WaitForCondition(Predicate, Context) instead. */
+	[[deprecated("Use WaitForCondition(Predicate) or WaitForCondition(Predicate, Context)")]] [[nodiscard]] inline FConditionAwaiter WaitForCondition(UObject* InContext, TFunction<bool()> InPredicate)
+	{
+		return WaitForCondition(MoveTemp(InPredicate), InContext);
 	}
 
 	// ============================================================================
@@ -489,7 +614,7 @@ namespace AsyncFlow
 					State->Continuation.resume();
 				}
 			});
-			Task.Start();
+			Task.StartManaged();
 		};
 
 		(SetupTask(Tasks), ...);
@@ -569,7 +694,7 @@ namespace AsyncFlow
 					}
 				}
 			});
-			Task.Start();
+			Task.StartManaged();
 		};
 
 		(SetupTask(Tasks), ...);
@@ -659,7 +784,7 @@ namespace AsyncFlow
 					}
 				}
 			});
-			Task.Start();
+			Task.StartManaged();
 		};
 
 		(SetupTask(Tasks), ...);
@@ -694,7 +819,7 @@ namespace AsyncFlow
 						State->Continuation.resume();
 					}
 				});
-				Task->Start();
+				Task->StartManaged();
 			}
 			else
 			{
@@ -738,7 +863,7 @@ namespace AsyncFlow
 					}
 				}
 			});
-			Task->Start();
+			Task->StartManaged();
 		}
 
 		return FWhenAnyAwaiter{ State };
@@ -796,7 +921,7 @@ namespace AsyncFlow
 					}
 				}
 			});
-			Task->Start();
+			Task->StartManaged();
 		}
 
 		return FRaceAwaiter{ State, CancelFunctions };
@@ -812,9 +937,11 @@ namespace AsyncFlow
  */
 	struct FUnpausedDelayAwaiter
 	{
-		UObject* WorldContext = nullptr;
+		TWeakObjectPtr<UObject> WorldContext;
 		float Seconds = 0.0f;
 		Private::FAwaiterAliveFlag AliveFlag;
+		mutable std::coroutine_handle<> StoredHandle;
+		mutable UAsyncFlowTickSubsystem* StoredSubsystem = nullptr;
 
 		FUnpausedDelayAwaiter() = default;
 		FUnpausedDelayAwaiter(FUnpausedDelayAwaiter&&) noexcept = default;
@@ -829,20 +956,38 @@ namespace AsyncFlow
 
 		void await_suspend(std::coroutine_handle<> Handle) const
 		{
-			if (!WorldContext || !WorldContext->GetWorld())
+			UObject* ResolvedCtx = WorldContext.Get();
+			if (!ResolvedCtx || !ResolvedCtx->GetWorld())
 			{
 				UE_LOG(LogAsyncFlow, Warning, TEXT("UnpausedDelay: null WorldContext or World — resuming immediately"));
 				Handle.resume();
 				return;
 			}
-			UAsyncFlowTickSubsystem* Subsystem = WorldContext->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
+			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
 			if (Subsystem)
 			{
+				StoredHandle = Handle;
+				StoredSubsystem = Subsystem;
 				Subsystem->ScheduleUnpausedDelay(Handle, Seconds, AliveFlag.Get());
 			}
 			else
 			{
 				Handle.resume();
+			}
+		}
+
+		void CancelAwaiter()
+		{
+			if (StoredHandle)
+			{
+				if (StoredSubsystem)
+				{
+					StoredSubsystem->CancelHandle(StoredHandle);
+					StoredSubsystem = nullptr;
+				}
+				auto H = StoredHandle;
+				StoredHandle = nullptr;
+				H.resume();
 			}
 		}
 
@@ -854,16 +999,22 @@ namespace AsyncFlow
 	/**
  * Suspend for Seconds using unpaused time (ticks during pause).
  *
- * @param WorldContext  Any UObject with a valid GetWorld().
  * @param Seconds      Duration in unpaused seconds.
+ * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
  * @return             An awaiter — use with co_await.
  */
-	[[nodiscard]] inline FUnpausedDelayAwaiter UnpausedDelay(UObject* WorldContext, float Seconds)
+	[[nodiscard]] inline FUnpausedDelayAwaiter UnpausedDelay(float Seconds, UObject* WorldContext = nullptr)
 	{
 		FUnpausedDelayAwaiter Aw;
-		Aw.WorldContext = WorldContext;
+		Aw.WorldContext = WorldContext ? WorldContext : Private::GetCurrentWorldContext();
 		Aw.Seconds = Seconds;
 		return Aw;
+	}
+
+	/** @deprecated Use UnpausedDelay(Seconds) or UnpausedDelay(Seconds, WorldContext) instead. */
+	[[deprecated("Use UnpausedDelay(Seconds) or UnpausedDelay(Seconds, WorldContext)")]] [[nodiscard]] inline FUnpausedDelayAwaiter UnpausedDelay(UObject* WorldContext, float Seconds)
+	{
+		return UnpausedDelay(Seconds, WorldContext);
 	}
 
 	// ============================================================================
@@ -876,9 +1027,11 @@ namespace AsyncFlow
  */
 	struct FAudioDelayAwaiter
 	{
-		UObject* WorldContext = nullptr;
+		TWeakObjectPtr<UObject> WorldContext;
 		float Seconds = 0.0f;
 		Private::FAwaiterAliveFlag AliveFlag;
+		mutable std::coroutine_handle<> StoredHandle;
+		mutable UAsyncFlowTickSubsystem* StoredSubsystem = nullptr;
 
 		FAudioDelayAwaiter() = default;
 		FAudioDelayAwaiter(FAudioDelayAwaiter&&) noexcept = default;
@@ -893,20 +1046,38 @@ namespace AsyncFlow
 
 		void await_suspend(std::coroutine_handle<> Handle) const
 		{
-			if (!WorldContext || !WorldContext->GetWorld())
+			UObject* ResolvedCtx = WorldContext.Get();
+			if (!ResolvedCtx || !ResolvedCtx->GetWorld())
 			{
 				UE_LOG(LogAsyncFlow, Warning, TEXT("AudioDelay: null WorldContext or World — resuming immediately"));
 				Handle.resume();
 				return;
 			}
-			UAsyncFlowTickSubsystem* Subsystem = WorldContext->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
+			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
 			if (Subsystem)
 			{
+				StoredHandle = Handle;
+				StoredSubsystem = Subsystem;
 				Subsystem->ScheduleAudioDelay(Handle, Seconds, AliveFlag.Get());
 			}
 			else
 			{
 				Handle.resume();
+			}
+		}
+
+		void CancelAwaiter()
+		{
+			if (StoredHandle)
+			{
+				if (StoredSubsystem)
+				{
+					StoredSubsystem->CancelHandle(StoredHandle);
+					StoredSubsystem = nullptr;
+				}
+				auto H = StoredHandle;
+				StoredHandle = nullptr;
+				H.resume();
 			}
 		}
 
@@ -918,16 +1089,22 @@ namespace AsyncFlow
 	/**
  * Suspend for Seconds using audio time.
  *
- * @param WorldContext  Any UObject with a valid GetWorld().
  * @param Seconds      Duration in audio-clock seconds.
+ * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
  * @return             An awaiter — use with co_await.
  */
-	[[nodiscard]] inline FAudioDelayAwaiter AudioDelay(UObject* WorldContext, float Seconds)
+	[[nodiscard]] inline FAudioDelayAwaiter AudioDelay(float Seconds, UObject* WorldContext = nullptr)
 	{
 		FAudioDelayAwaiter Aw;
-		Aw.WorldContext = WorldContext;
+		Aw.WorldContext = WorldContext ? WorldContext : Private::GetCurrentWorldContext();
 		Aw.Seconds = Seconds;
 		return Aw;
+	}
+
+	/** @deprecated Use AudioDelay(Seconds) or AudioDelay(Seconds, WorldContext) instead. */
+	[[deprecated("Use AudioDelay(Seconds) or AudioDelay(Seconds, WorldContext)")]] [[nodiscard]] inline FAudioDelayAwaiter AudioDelay(UObject* WorldContext, float Seconds)
+	{
+		return AudioDelay(Seconds, WorldContext);
 	}
 
 	// ============================================================================
@@ -943,9 +1120,11 @@ namespace AsyncFlow
  */
 	struct FActorDilatedDelayAwaiter
 	{
-		AActor* Actor = nullptr;
+		TWeakObjectPtr<AActor> Actor;
 		float Seconds = 0.0f;
 		Private::FAwaiterAliveFlag AliveFlag;
+		mutable std::coroutine_handle<> StoredHandle;
+		mutable UAsyncFlowTickSubsystem* StoredSubsystem = nullptr;
 
 		FActorDilatedDelayAwaiter() = default;
 		FActorDilatedDelayAwaiter(FActorDilatedDelayAwaiter&&) noexcept = default;
@@ -955,25 +1134,43 @@ namespace AsyncFlow
 
 		bool await_ready() const
 		{
-			return Seconds <= 0.0f || !Actor;
+			return Seconds <= 0.0f || !Actor.IsValid();
 		}
 
 		void await_suspend(std::coroutine_handle<> Handle) const
 		{
-			if (!Actor || !Actor->GetWorld())
+			AActor* ResolvedActor = Actor.Get();
+			if (!ResolvedActor || !ResolvedActor->GetWorld())
 			{
 				UE_LOG(LogAsyncFlow, Warning, TEXT("SecondsForActor: null Actor or World — resuming immediately"));
 				Handle.resume();
 				return;
 			}
-			UAsyncFlowTickSubsystem* Subsystem = Actor->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
+			UAsyncFlowTickSubsystem* Subsystem = ResolvedActor->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
 			if (Subsystem)
 			{
-				Subsystem->ScheduleActorDilatedDelay(Handle, Actor, Seconds, AliveFlag.Get());
+				StoredHandle = Handle;
+				StoredSubsystem = Subsystem;
+				Subsystem->ScheduleActorDilatedDelay(Handle, ResolvedActor, Seconds, AliveFlag.Get());
 			}
 			else
 			{
 				Handle.resume();
+			}
+		}
+
+		void CancelAwaiter()
+		{
+			if (StoredHandle)
+			{
+				if (StoredSubsystem)
+				{
+					StoredSubsystem->CancelHandle(StoredHandle);
+					StoredSubsystem = nullptr;
+				}
+				auto H = StoredHandle;
+				StoredHandle = nullptr;
+				H.resume();
 			}
 		}
 
@@ -1020,7 +1217,7 @@ namespace AsyncFlow
 	struct FTickTimeBudget
 	{
 		/** World context for accessing the tick subsystem when yielding. */
-		UObject* WorldContext = nullptr;
+		TWeakObjectPtr<UObject> WorldContext;
 
 		/** Maximum wall-clock seconds allowed per tick before yielding. */
 		double BudgetSeconds = 0.001;
@@ -1042,16 +1239,23 @@ namespace AsyncFlow
 		/**
 	 * Create a budget with a millisecond limit.
 	 *
-	 * @param InWorldContext  Any UObject with a valid GetWorld().
 	 * @param Ms             Budget in milliseconds per tick (e.g. 2.0 = 2ms).
+	 * @param InWorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
 	 * @return               A configured FTickTimeBudget awaiter.
 	 */
-		static FTickTimeBudget Milliseconds(UObject* InWorldContext, double Ms)
+		static FTickTimeBudget Milliseconds(double Ms, UObject* InWorldContext = nullptr)
 		{
 			FTickTimeBudget Budget;
-			Budget.WorldContext = InWorldContext;
+			Budget.WorldContext = InWorldContext ? InWorldContext : Private::GetCurrentWorldContext();
 			Budget.BudgetSeconds = Ms * 0.001;
 			return Budget;
+		}
+
+		/** @deprecated Use Milliseconds(Ms) or Milliseconds(Ms, WorldContext) instead. */
+		[[deprecated("Use Milliseconds(Ms) or Milliseconds(Ms, WorldContext)")]]
+		static FTickTimeBudget Milliseconds(UObject* InWorldContext, double Ms)
+		{
+			return Milliseconds(Ms, InWorldContext);
 		}
 
 		bool await_ready()
@@ -1068,12 +1272,13 @@ namespace AsyncFlow
 
 		void await_suspend(std::coroutine_handle<> Handle)
 		{
-			if (!WorldContext)
+			UObject* ResolvedCtx = WorldContext.Get();
+			if (!ResolvedCtx)
 			{
 				Handle.resume();
 				return;
 			}
-			UWorld* World = WorldContext->GetWorld();
+			UWorld* World = ResolvedCtx->GetWorld();
 			if (!World)
 			{
 				Handle.resume();

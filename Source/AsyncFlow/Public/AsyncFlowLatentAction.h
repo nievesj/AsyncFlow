@@ -38,7 +38,20 @@ namespace AsyncFlow
  * When the coroutine completes or the owning UObject is destroyed, the
  * latent action finishes and the output exec pin fires.
  *
- * Usage in a UFUNCTION:
+ * Two construction paths:
+ * 1. Legacy: Takes a TTask<void> directly (used by StartLatentCoroutine helper).
+ * 2. Control block: Takes a TSharedPtr<FCoroutineControlBlock<void>> (used by
+ *    auto-detected latent mode in TTask<void>::Start()).
+ *
+ * Usage in a UFUNCTION (automatic latent detection — Phase 2):
+ *   UFUNCTION(BlueprintCallable, meta=(Latent, LatentInfo="LatentInfo"))
+ *   TTask<void> MyLatentFunc(UObject* WorldContextObject, FLatentActionInfo LatentInfo)
+ *   {
+ *       co_await Delay(2.0f);
+ *       co_return;
+ *   }
+ *
+ * Usage in a UFUNCTION (explicit helper — Phase 1 legacy):
  *   UFUNCTION(BlueprintCallable, meta=(Latent, LatentInfo="LatentInfo"))
  *   void MyLatentFunc(UObject* WorldContextObject, FLatentActionInfo LatentInfo)
  *   {
@@ -48,6 +61,7 @@ namespace AsyncFlow
 	class FAsyncFlowLatentAction : public FPendingLatentAction
 	{
 	public:
+		/** Legacy constructor: takes ownership of a TTask<void> and starts it. */
 		FAsyncFlowLatentAction(const FLatentActionInfo& InLatentInfo, TTask<void>&& InTask)
 			: Task(MoveTemp(InTask))
 			, ExecutionFunction(InLatentInfo.ExecutionFunction)
@@ -60,9 +74,29 @@ namespace AsyncFlow
 			Task.Start();
 		}
 
+		/** Control-block constructor: monitors an already-started coroutine (auto-detected latent mode). */
+		FAsyncFlowLatentAction(const FLatentActionInfo& InLatentInfo, TSharedPtr<FCoroutineControlBlock<void>> InCB)
+			: ControlBlock(MoveTemp(InCB))
+			, ExecutionFunction(InLatentInfo.ExecutionFunction)
+			, OutputLink(InLatentInfo.Linkage)
+			, CallbackTarget(InLatentInfo.CallbackTarget)
+		{
+		}
+
 		virtual void UpdateOperation(FLatentResponse& Response) override
 		{
-			if (bTaskCompleted || Task.IsCancelled())
+			bool bDone;
+			if (ControlBlock)
+			{
+				bDone = ControlBlock->bCompleted.load(std::memory_order_acquire)
+					|| (ControlBlock->FlowState && ControlBlock->FlowState->IsCancelled());
+			}
+			else
+			{
+				bDone = bTaskCompleted || Task.IsCancelled();
+			}
+
+			if (bDone)
 			{
 				Response.FinishAndTriggerIf(true, ExecutionFunction, OutputLink, CallbackTarget.Get());
 			}
@@ -70,8 +104,20 @@ namespace AsyncFlow
 
 		virtual ~FAsyncFlowLatentAction() override
 		{
-			// Cancel the coroutine if the latent action is destroyed (owner died, etc.)
-			if (Task.IsValid() && !Task.IsCompleted())
+			if (ControlBlock)
+			{
+				if (ControlBlock->FlowState && !ControlBlock->bCompleted.load(std::memory_order_acquire))
+				{
+					ControlBlock->FlowState->Cancel();
+					if (ControlBlock->CancelCurrentAwaiterFunc)
+					{
+						auto CancelFunc = MoveTemp(ControlBlock->CancelCurrentAwaiterFunc);
+						ControlBlock->CancelCurrentAwaiterFunc = nullptr;
+						CancelFunc();
+					}
+				}
+			}
+			else if (Task.IsValid() && !Task.IsCompleted())
 			{
 				Task.Cancel();
 			}
@@ -80,12 +126,17 @@ namespace AsyncFlow
 #if WITH_EDITOR
 		virtual FString GetDescription() const override
 		{
+			if (ControlBlock && ControlBlock->FlowState)
+			{
+				return FString::Printf(TEXT("AsyncFlow Latent [%s]"), *ControlBlock->FlowState->DebugName);
+			}
 			return FString::Printf(TEXT("AsyncFlow Latent [%s]"), *Task.GetDebugName());
 		}
 #endif
 
 	private:
 		TTask<void> Task;
+		TSharedPtr<FCoroutineControlBlock<void>> ControlBlock;
 		FName ExecutionFunction;
 		int32 OutputLink = 0;
 		TWeakObjectPtr<UObject> CallbackTarget;
@@ -97,6 +148,9 @@ namespace AsyncFlow
  * Registers the latent action with the engine and starts the coroutine.
  *
  * Returns false if the world or latent action manager is unavailable.
+ *
+ * @note This is the legacy (Phase 1) API. With Phase 2, coroutine functions
+ *       that accept FLatentActionInfo auto-detect latent mode — no helper needed.
  */
 	inline bool StartLatentCoroutine(UObject* WorldContextObject, const FLatentActionInfo& LatentInfo, TTask<void>&& Task)
 	{
