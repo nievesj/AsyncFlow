@@ -30,6 +30,7 @@
 
 #include "AsyncFlowTask.h"
 #include "AsyncFlowDynamicDelegateBridge.h"
+#include "AsyncFlowTypedDelegateBridge.h"
 #include "Delegates/Delegate.h"
 #include "Delegates/DelegateCombinations.h"
 #include "Templates/Tuple.h"
@@ -509,7 +510,10 @@ namespace AsyncFlow
 		TWaitForDynamicDelegateAwaiter(const TWaitForDynamicDelegateAwaiter&) = delete;
 		TWaitForDynamicDelegateAwaiter& operator=(const TWaitForDynamicDelegateAwaiter&) = delete;
 
-		bool await_ready() const { return false; }
+		bool await_ready() const
+		{
+			return false;
+		}
 
 		void await_suspend(std::coroutine_handle<> Handle)
 		{
@@ -574,6 +578,206 @@ namespace AsyncFlow
 	[[nodiscard]] TWaitForDynamicDelegateAwaiter<DelegateType> WaitForDynamicDelegate(DelegateType& Delegate)
 	{
 		return TWaitForDynamicDelegateAwaiter<DelegateType>(Delegate);
+	}
+
+	// ============================================================================
+	// Typed Dynamic Delegate Awaiting — captures broadcast parameters
+	// ============================================================================
+
+	namespace Private
+	{
+		/**
+		 * Compute the byte offset of each parameter in a flat struct following
+		 * platform-standard C++ alignment rules. These match UHT-generated parameter
+		 * structs for POD/pointer types (float, int32, bool, UObject*, FVector, etc.).
+		 *
+		 * For complex UE types (FString, TArray), the struct layout still matches
+		 * because UHT uses the compiler's natural alignment. A raw Memcpy captures
+		 * the bytes, and reinterpret_cast reads them back within the same call frame
+		 * (the original Parms buffer is still alive on the Broadcast() caller's stack).
+		 */
+		template <typename... Ts>
+		struct TDelegateParamLayout
+		{
+			static constexpr size_t Count = sizeof...(Ts);
+
+			static void ComputeOffsets(size_t* OutOffsets)
+			{
+				size_t Off = 0;
+				size_t I = 0;
+				((Off = (Off + alignof(Ts) - 1) & ~(alignof(Ts) - 1),
+					 OutOffsets[I++] = Off,
+					 Off += sizeof(Ts)),
+					...);
+			}
+
+			static constexpr size_t TotalSize()
+			{
+				size_t Size = 0;
+				((Size = (Size + alignof(Ts) - 1) & ~(alignof(Ts) - 1),
+					 Size += sizeof(Ts)),
+					...);
+				return Size;
+			}
+		};
+
+		template <typename T>
+		T ReadParamAtOffset(const uint8* Data, size_t Offset)
+		{
+			return *reinterpret_cast<const T*>(Data + Offset);
+		}
+
+		template <typename... Ts, size_t... Is>
+		TTuple<Ts...> ExtractDelegateParamsImpl(const uint8* Data, const size_t* Offsets, std::index_sequence<Is...>)
+		{
+			return MakeTuple(ReadParamAtOffset<Ts>(Data, Offsets[Is])...);
+		}
+
+		template <typename... Ts>
+		TTuple<Ts...> ExtractDelegateParams(const TArray<uint8>& Buffer)
+		{
+			size_t Offsets[sizeof...(Ts)];
+			TDelegateParamLayout<Ts...>::ComputeOffsets(Offsets);
+			return ExtractDelegateParamsImpl<Ts...>(Buffer.GetData(), Offsets, std::index_sequence_for<Ts...>{});
+		}
+	} // namespace Private
+
+	/**
+	 * Awaiter for typed dynamic multicast delegates (1+ parameters).
+	 *
+	 * Uses UAsyncFlowTypedDelegateBridge which overrides ProcessEvent to capture
+	 * the raw parameter bytes from the delegate's broadcast frame. Parameters are
+	 * extracted at compile-time-known offsets in await_resume().
+	 *
+	 * Supports CancelableAwaiter concept for expedited cancellation via CO_CONTRACT.
+	 *
+	 * @tparam DelegateType  Any type satisfying DynamicMulticastDelegate concept.
+	 * @tparam ParamTypes    The delegate's parameter types, in declaration order.
+	 */
+	template <DynamicMulticastDelegate DelegateType, typename... ParamTypes>
+	struct TWaitForTypedDynamicDelegateAwaiter
+	{
+		static_assert(sizeof...(ParamTypes) > 0,
+			"Use TWaitForDynamicDelegateAwaiter for zero-arg delegates.");
+
+		using ResultType = std::conditional_t<
+			sizeof...(ParamTypes) == 1,
+			std::tuple_element_t<0, std::tuple<std::decay_t<ParamTypes>...>>,
+			TTuple<std::decay_t<ParamTypes>...>>;
+
+		DelegateType& Delegate;
+		TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
+		std::coroutine_handle<> Continuation;
+		TObjectPtr<UAsyncFlowTypedDelegateBridge> Bridge;
+
+		explicit TWaitForTypedDynamicDelegateAwaiter(DelegateType& InDelegate)
+			: Delegate(InDelegate)
+		{
+		}
+
+		~TWaitForTypedDynamicDelegateAwaiter()
+		{
+			*AliveFlag = false;
+			Cleanup();
+		}
+
+		TWaitForTypedDynamicDelegateAwaiter(TWaitForTypedDynamicDelegateAwaiter&&) noexcept = default;
+		TWaitForTypedDynamicDelegateAwaiter& operator=(TWaitForTypedDynamicDelegateAwaiter&&) = delete;
+		TWaitForTypedDynamicDelegateAwaiter(const TWaitForTypedDynamicDelegateAwaiter&) = delete;
+		TWaitForTypedDynamicDelegateAwaiter& operator=(const TWaitForTypedDynamicDelegateAwaiter&) = delete;
+
+		bool await_ready() const
+		{
+			return false;
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			Continuation = Handle;
+
+			Bridge = NewObject<UAsyncFlowTypedDelegateBridge>();
+			Bridge->AddToRoot();
+			Bridge->Continuation = Handle;
+			Bridge->AliveFlag = AliveFlag;
+			Bridge->ParamsSize = static_cast<int32>(
+				Private::TDelegateParamLayout<std::decay_t<ParamTypes>...>::TotalSize());
+
+			FScriptDelegate Binding;
+			Binding.BindUFunction(Bridge.Get(), UAsyncFlowTypedDelegateBridge::DelegateFunctionName);
+			Delegate.Add(Binding);
+		}
+
+		ResultType await_resume()
+		{
+			ResultType Result;
+			if constexpr (sizeof...(ParamTypes) == 1)
+			{
+				using T = std::tuple_element_t<0, std::tuple<std::decay_t<ParamTypes>...>>;
+				Result = Private::ReadParamAtOffset<T>(Bridge->CapturedParams.GetData(), 0);
+			}
+			else
+			{
+				Result = Private::ExtractDelegateParams<std::decay_t<ParamTypes>...>(
+					Bridge->CapturedParams);
+			}
+			Cleanup();
+			return Result;
+		}
+
+		void CancelAwaiter()
+		{
+			Cleanup();
+			if (Continuation && !Continuation.done())
+			{
+				auto H = Continuation;
+				Continuation = nullptr;
+				H.resume();
+			}
+		}
+
+	private:
+		void Cleanup()
+		{
+			if (Bridge)
+			{
+				FScriptDelegate Binding;
+				Binding.BindUFunction(Bridge.Get(),
+					UAsyncFlowTypedDelegateBridge::DelegateFunctionName);
+				Delegate.Remove(Binding);
+
+				Bridge->RemoveFromRoot();
+				Bridge->Continuation = nullptr;
+				Bridge = nullptr;
+			}
+		}
+	};
+
+	/**
+	 * Wait for a typed dynamic multicast delegate to fire once, capturing its parameters.
+	 *
+	 * Uses ProcessEvent interception to generically capture parameters from any
+	 * dynamic delegate signature — no per-type bridge classes needed.
+	 *
+	 * @tparam ParamTypes  The delegate's parameter types, in order.
+	 *                     Must match the DECLARE_DYNAMIC_MULTICAST_DELEGATE_*Param declaration.
+	 * @param Delegate     Reference to the dynamic multicast delegate.
+	 * @return             An awaiter — co_await yields:
+	 *                     - T directly for single-param delegates
+	 *                     - TTuple<T1, T2, ...> for multi-param delegates
+	 *
+	 * Example (single param):
+	 *   // Given: DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDamage, float, Damage);
+	 *   float Damage = co_await AsyncFlow::WaitForDynamicDelegate<float>(MyActor->OnDamage);
+	 *
+	 * Example (multi param):
+	 *   // Given: DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnHit, AActor*, Actor, float, Damage);
+	 *   auto [Actor, Damage] = co_await AsyncFlow::WaitForDynamicDelegate<AActor*, float>(MyActor->OnHit);
+	 */
+	template <typename... ParamTypes, DynamicMulticastDelegate DelegateType>
+		requires(sizeof...(ParamTypes) > 0)
+	[[nodiscard]] auto WaitForDynamicDelegate(DelegateType& Delegate)
+	{
+		return TWaitForTypedDynamicDelegateAwaiter<DelegateType, ParamTypes...>(Delegate);
 	}
 
 } // namespace AsyncFlow

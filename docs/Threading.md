@@ -128,9 +128,11 @@ Or explicitly via the wrapper:
 co_await AsyncFlow::WaitForDynamicDelegate(MyActor->OnSomeEvent);
 ```
 
-This works by creating a transient bridge UObject with a `UFUNCTION` that binds to the dynamic delegate. The binding is automatically cleaned up after the first broadcast or on cancellation.
+This works by creating a transient bridge UObject with a `UFUNCTION` that binds to the dynamic delegate. The binding is
+automatically cleaned up after the first broadcast or on cancellation.
 
-> **Note:** Only the "delegate fired" event is captured — parameters are not forwarded. For typed dynamic delegates with parameters, use `AsyncFlow::Chain()` with manual binding.
+> **Note:** Only the "delegate fired" event is captured — parameters are not forwarded. For typed dynamic delegates with
+> parameters, use `AsyncFlow::Chain()` with manual binding.
 
 > The explicit wrappers (`AwaitFuture`, `AwaitUETask`, `WaitForDelegate`) are still available for backward compatibility
 > or when you need to pass additional options.
@@ -281,7 +283,8 @@ co_await AsyncFlow::PlatformSeconds(0.5);
 
 ## MoveToSimilarThread
 
-Records the current named-thread kind at construction and, when later `co_await`-ed, dispatches back to a thread of that kind. If execution is already on the recorded kind, the awaiter is a no-op.
+Records the current named-thread kind at construction and, when later `co_await`-ed, dispatches back to a thread of that
+kind. If execution is already on the recorded kind, the awaiter is a no-op.
 
 ```cpp
 auto GoBack = AsyncFlow::MoveToSimilarThread(); // records "game thread"
@@ -297,7 +300,7 @@ co_await GoBack;                                // back to game thread
 Moves execution into a specific `FQueuedThreadPool`.
 
 ```cpp
-co_await AsyncFlow::MoveToThreadPool(*GThreadPool, EQueuedWorkPriority::Normal);
+co_await AsyncFlow::MoveToThreadPool(*GThreadPool);
 ```
 
 `await_ready()` always returns `false` — the coroutine is always dispatched to the pool.
@@ -306,7 +309,8 @@ co_await AsyncFlow::MoveToThreadPool(*GThreadPool, EQueuedWorkPriority::Normal);
 
 ## PlatformSecondsAnyThread
 
-Like `PlatformSeconds` but resumes on the **worker thread** that performed the sleep instead of dispatching back to the game thread. More efficient for background pipelines.
+Like `PlatformSeconds` but resumes on the **worker thread** that performed the sleep instead of dispatching back to the
+game thread. More efficient for background pipelines.
 
 ```cpp
 co_await AsyncFlow::PlatformSecondsAnyThread(2.0);

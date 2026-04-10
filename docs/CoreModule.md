@@ -48,6 +48,7 @@ Task.Start();
 
 // 3. Query state
 Task.IsValid();      // Has a coroutine handle
+Task.IsStarted();    // Start() has been called
 Task.IsCompleted();  // Finished executing
 Task.IsCancelled();  // Was cancelled
 Task.WasSuccessful();// Completed and not cancelled
@@ -260,7 +261,7 @@ Lightweight check inside a coroutine body. Does not suspend — returns immediat
 requested.
 
 ```cpp
-co_await AsyncFlow::FinishNowIfCanceled();
+co_await AsyncFlow::FFinishNowIfCanceled{};
 // If Cancel() was called, the coroutine stops here without suspension.
 // Otherwise, execution continues immediately.
 ```
@@ -273,7 +274,7 @@ AsyncFlow::TTask<void> UMyComponent::ProcessBatch()
     for (auto& Item : Items)
     {
         ProcessItem(Item);
-        co_await AsyncFlow::FinishNowIfCanceled();
+        co_await AsyncFlow::FFinishNowIfCanceled{};
     }
 }
 ```
@@ -454,33 +455,13 @@ co_await AsyncFlow::WaitForCondition(this, [this]()
 
 </details>
 
-### TickUpdate
-
-Call a function each frame with `DeltaTime`. Resume when it returns `true`.
-
-```cpp
-co_await AsyncFlow::TickUpdate([this](float DT) -> bool
-{
-    Progress += DT * Speed;
-    return Progress >= 1.0f;
-});
-```
-
-<details><summary>Deprecated signature</summary>
-
-```cpp
-co_await AsyncFlow::TickUpdate(this, [this](float DT) -> bool { ... });
-```
-
-</details>
-
 ### FTickTimeBudget
 
 Time-sliced processing within a per-tick budget. Yields to the next frame when the budget runs out, then picks up where
-it left off. No world context required.
+it left off. World context is optional (auto-resolved in latent mode).
 
 ```cpp
-AsyncFlow::FTickTimeBudget Budget(5.0); // 5ms per frame
+auto Budget = AsyncFlow::FTickTimeBudget::Milliseconds(5.0); // 5ms per frame
 for (FItem& Item : BigArray)
 {
     ProcessItem(Item);
@@ -493,23 +474,23 @@ for (FItem& Item : BigArray)
 <details><summary>Deprecated signature</summary>
 
 ```cpp
-auto Budget = AsyncFlow::FTickTimeBudget::Milliseconds(this, 2.0);  // deprecated
+auto Budget = AsyncFlow::FTickTimeBudget::Milliseconds(this, 2.0);  // deprecated — world context moved to second arg
 ```
 
 </details>
 
 ### UntilTime / UntilRealTime / UntilUnpausedTime / UntilAudioTime
 
-Wait until a world clock reaches an absolute target time. If the target has already passed, the coroutine continues without suspending.
+Wait until a clock reaches an absolute target time. If the target has already passed, the coroutine continues without suspending. `UntilRealTime` uses `FPlatformTime::Seconds()` (wall-clock); the others use their respective `UWorld` time domains.
 
 ```cpp
 co_await AsyncFlow::UntilTime(World->GetTimeSeconds() + 10.0);
-co_await AsyncFlow::UntilRealTime(World->GetRealTimeSeconds() + 5.0);
+co_await AsyncFlow::UntilRealTime(FPlatformTime::Seconds() + 5.0);
 co_await AsyncFlow::UntilUnpausedTime(World->GetUnpausedTimeSeconds() + 3.0);
 co_await AsyncFlow::UntilAudioTime(World->GetAudioTimeSeconds() + 2.0);
 ```
 
-Each variant uses the corresponding world time domain. Optional world context parameter:
+Each variant uses its corresponding time source. Optional world context parameter:
 
 ```cpp
 co_await AsyncFlow::UntilTime(TargetTime, this);  // explicit context
@@ -555,6 +536,13 @@ Like `WhenAny`, but cancels all other tasks when the first completes. Returns a 
 ```cpp
 int32 Winner = co_await AsyncFlow::Race(TaskA, TaskB);
 // Loser tasks are cancelled automatically
+```
+
+Also works with `TArray<TTask<void>*>`:
+
+```cpp
+TArray<AsyncFlow::TTask<void>*> Tasks = { &TaskA, &TaskB };
+int32 Winner = co_await AsyncFlow::Race(Tasks);
 ```
 
 All three aggregates (`WhenAll`, `WhenAny`, `Race`) support **expedited cancellation** — if the parent coroutine is cancelled while waiting, all inner tasks are cancelled immediately via `CancelAwaiter()`.
@@ -805,3 +793,7 @@ Scheduling methods (used internally by awaiters):
 | `ScheduleTicks`             | Frame count                                 |
 | `ScheduleCondition`         | Predicate polling                           |
 | `ScheduleTickUpdate`        | Per-frame callback (returns true when done) |
+| `ScheduleUntilTime`         | Absolute game-time target                   |
+| `ScheduleUntilRealTime`     | Absolute real-time target                   |
+| `ScheduleUntilUnpausedTime` | Absolute unpaused-time target               |
+| `ScheduleUntilAudioTime`    | Absolute audio-time target                  |

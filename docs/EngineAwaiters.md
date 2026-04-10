@@ -6,9 +6,6 @@ These awaiters wrap common UE engine systems. Each has a dedicated header to avo
 into every translation unit.
 
 > **v2 changes:**
-> - **Optional world context:** Timeline and tick-based awaiters in this module no longer require an explicit `UObject*`
-    context. World is auto-resolved (explicit → latent mode → `GEngine->GetCurrentPlayWorld()`). Old signatures still
-    compile but are deprecated.
 > - **Implicit awaiting:** `TFuture<T>`, `UE::Tasks::TTask<T>`, and multicast/unicast delegates are directly `co_await`
     -able without wrapper functions (see [Threading](Threading.md) and [CoreModule](CoreModule.md) for details).
 
@@ -203,6 +200,16 @@ Unload a streaming level. Polls until fully unloaded.
 bool bSuccess = co_await AsyncFlow::UnloadStreamLevel(this, TEXT("Arena_01"));
 ```
 
+### OpenLevel
+
+Trigger a full map transition. Wraps `UGameplayStatics::OpenLevel`.
+
+> **Warning:** The coroutine will **not** resume — the world (and all coroutines in it) is destroyed by the transition.
+
+```cpp
+AsyncFlow::OpenLevel(this, TEXT("/Game/Maps/Arena"), true);
+```
+
 ---
 
 ## Animation
@@ -337,16 +344,7 @@ if (Save)
 ### Timeline
 
 Per-tick interpolation from one value to another over a duration. Calls the update callback each frame with the
-interpolated value. World context is optional — auto-resolved when omitted.
-
-```cpp
-co_await AsyncFlow::Timeline(0.0f, 1.0f, 0.5f, [this](float Alpha)
-{
-    DynamicMaterial->SetScalarParameterValue(TEXT("Opacity"), Alpha);
-});
-```
-
-<details><summary>Deprecated signature (still compiles)</summary>
+interpolated value.
 
 ```cpp
 co_await AsyncFlow::Timeline(this, 0.0f, 1.0f, 0.5f, [this](float Alpha)
@@ -355,42 +353,25 @@ co_await AsyncFlow::Timeline(this, 0.0f, 1.0f, 0.5f, [this](float Alpha)
 });
 ```
 
-</details>
-
 ### RealTimeline / UnpausedTimeline
 
-Same as Timeline but uses wall-clock time instead of game time. Runs during pause.
+Same as Timeline but uses wall-clock time instead of game time. Runs during pause. `UnpausedTimeline` is a
+convenience alias for `RealTimeline`.
 
 ```cpp
-co_await AsyncFlow::RealTimeline(0.0f, 1.0f, 0.3f, [this](float Alpha)
+co_await AsyncFlow::RealTimeline(this, 0.0f, 1.0f, 0.3f, [this](float Alpha)
 {
     SetWidgetOpacity(Alpha);
 });
 ```
-
-<details><summary>Deprecated signature</summary>
-
-```cpp
-co_await AsyncFlow::RealTimeline(this, 0.0f, 1.0f, 0.3f, Callback);
-```
-
-</details>
 
 ### AudioTimeline
 
 Uses real time as a proxy for audio time.
 
 ```cpp
-co_await AsyncFlow::AudioTimeline(0.0f, 1.0f, 1.0f, Callback);
-```
-
-<details><summary>Deprecated signature</summary>
-
-```cpp
 co_await AsyncFlow::AudioTimeline(this, 0.0f, 1.0f, 1.0f, Callback);
 ```
-
-</details>
 
 ### MoveComponentTo
 
@@ -423,4 +404,20 @@ Play a UMG widget animation and wait for it to finish. Only available if UMG is 
 
 ```cpp
 co_await AsyncFlow::PlayWidgetAnimationAndWait(MyWidget, FadeInAnimation);
+```
+
+### WaitForEndOfFrame
+
+Suspend until the end of the current frame (implemented as a 1-tick delay via the tick subsystem).
+
+```cpp
+co_await AsyncFlow::WaitForEndOfFrame(this);
+```
+
+### SetTimerAndWait
+
+Set a one-shot timer via `FTimerManager` and wait for it to fire.
+
+```cpp
+co_await AsyncFlow::SetTimerAndWait(this, 2.5f);
 ```

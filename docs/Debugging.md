@@ -30,6 +30,26 @@ Typically called in the completion callback or when the task is no longer needed
 discardable (self-sustaining after `Start()`), unregistering is purely for debugger bookkeeping — it does not affect the
 coroutine's lifecycle.
 
+### Low-Level Register / Unregister
+
+The template helpers above call through to public methods on `FAsyncFlowDebugger`. You can use these directly when
+tracking non-`TTask` coroutines or when you already have a coroutine handle address:
+
+```cpp
+AsyncFlow::FAsyncFlowDebugger& Debugger = AsyncFlow::FAsyncFlowDebugger::Get();
+
+// Register with an arbitrary uint64 ID (typically the coroutine handle address)
+Debugger.Register(Id, TEXT("MyCoroutine"));
+
+// Unregister when the coroutine completes or is no longer tracked
+Debugger.Unregister(Id);
+```
+
+| Method                                             | Description                                          |
+|----------------------------------------------------|------------------------------------------------------|
+| `void Register(uint64 Id, const FString& DebugName)` | Start tracking a coroutine. Duplicate IDs are ignored. |
+| `void Unregister(uint64 Id)`                       | Remove a coroutine from tracking.                    |
+
 ### Querying Active Coroutines
 
 ```cpp
@@ -66,12 +86,12 @@ Console command: `AsyncFlow.List` — dumps all active tracked coroutines to the
 
 Per-coroutine tracking data:
 
-| Field          | Type      | Description                                |
-|----------------|-----------|--------------------------------------------|
-| `DebugName`    | `FString` | Name set via `SetDebugName()`              |
-| `CreationTime` | `double`  | `FPlatformTime::Seconds()` at registration |
-| `bCompleted`   | `bool`    | Whether the coroutine has finished         |
-| `bCancelled`   | `bool`    | Whether the coroutine was cancelled        |
+| Field          | Type      | Description                                                                              |
+|----------------|-----------|------------------------------------------------------------------------------------------|
+| `DebugName`    | `FString` | Name set via `SetDebugName()`                                                            |
+| `CreationTime` | `double`  | `FPlatformTime::Seconds()` at registration                                               |
+| `bCompleted`   | `bool`    | Whether the coroutine has finished — not auto-updated by the debugger; available for user code |
+| `bCancelled`   | `bool`    | Whether the coroutine was cancelled — not auto-updated by the debugger; available for user code |
 
 ---
 
@@ -90,7 +110,7 @@ Debug names appear in:
 
 - `FAsyncFlowDebugger` tracking
 - `ensure` messages from `OnComplete` double-registration checks
-- `FAsyncFlowLatentAction::GetDescription()` in the editor latent action list
+- `FAsyncFlowLatentAction::GetDescription()` in the editor latent action list (`WITH_EDITOR` only)
 
 ---
 
@@ -118,7 +138,7 @@ To debug cancellation behavior:
 - Set a breakpoint in `FAsyncFlowState::Cancel()` with the condition `DebugName == TEXT("YourTaskName")`.
 - All timing awaiters, sync primitives (`FAwaitableEvent`, `FAwaitableSemaphore`, `FAutoResetEvent`), and delegate
   awaiters support expedited cancellation via `CancelAwaiter()`.
-- Use `co_await AsyncFlow::FinishNowIfCanceled()` in your coroutine to add explicit cancellation check points that show
+- Use `co_await AsyncFlow::FFinishNowIfCanceled{}` in your coroutine to add explicit cancellation check points that show
   up clearly in a debugger.
 
 ---

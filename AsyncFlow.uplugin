@@ -29,6 +29,11 @@
       "Name": "AsyncFlowEditor",
       "Type": "Editor",
       "LoadingPhase": "Default"
+    },
+    {
+      "Name": "AsyncFlowBlueprint",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
     }
   ],
   "Plugins": [

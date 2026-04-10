@@ -16,7 +16,8 @@ releasing.
     `TTask::Cancel()` is called.
 
 > **v3 changes:**
-> - **Caller-thread resumption:** Waiters now resume on the **thread that calls `Signal()` / `Release()`**, not forced to
+> - **Caller-thread resumption:** Waiters now resume on the **thread that calls `Signal()` / `Release()`**, not forced
+    to
     the game thread. This eliminates the `AsyncTask(GameThread)` dispatch overhead for cross-thread signals. If you need
     game-thread safety after resume, use `co_await MoveToGameThread()`.
 > - `CancelAwaiter()` also resumes on the cancelling thread.
@@ -113,6 +114,7 @@ Use `FAutoResetEvent` for producer/consumer patterns where each signal should wa
 | Method         | Description                                                                                               |
 |----------------|-----------------------------------------------------------------------------------------------------------|
 | `Signal()`     | Wake one waiter (FIFO) and auto-reset. If no waiter is present, latch the signal for the next `co_await`. |
+| `Reset()`      | Clear the signaled state manually. Normally the event auto-resets on `co_await`. Thread-safe.             |
 | `IsSignaled()` | Returns true if a latched signal is pending (no waiter consumed it yet).                                  |
 
 ### Usage
@@ -161,13 +163,13 @@ without suspending. If all permits are in use, the coroutine is enqueued and sus
 
 ### API
 
-| Method                                | Description                                                                                                                                                  |
-|---------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `FAwaitableSemaphore(int32 MaxCount)` | Construct with a maximum permit count (>= 1).                                                                                                                |
-| `co_await Semaphore`                  | Acquires one permit under the lock. Suspends if all permits are in use.                                                                                      |
-| `Release()`                           | Release one permit. If there are waiters, resumes the oldest (FIFO) and hands it the permit directly (count unchanged). If no waiters, decrements the count. |
-| `Release(int32 Count)`                | **Batch release.** Release N permits at once. Wakes up to N waiters in FIFO order.                                                                           |
-| `GetAvailable()`                      | Returns the number of currently available permits.                                                                                                           |
+| Method                                    | Description                                                                                                                                                  |
+|-------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `FAwaitableSemaphore(int32 MaxCount = 1)` | Construct with a maximum permit count (>= 1). Defaults to 1 (mutex-like behavior).                                                                           |
+| `co_await Semaphore`                      | Acquires one permit under the lock. Suspends if all permits are in use.                                                                                      |
+| `Release()`                               | Release one permit. If there are waiters, resumes the oldest (FIFO) and hands it the permit directly (count unchanged). If no waiters, decrements the count. |
+| `Release(int32 Count)`                    | **Batch release.** Release N permits at once. Wakes up to N waiters in FIFO order.                                                                           |
+| `GetAvailable()`                          | Returns the number of currently available permits.                                                                                                           |
 
 ### Usage — Concurrency Limiting
 
@@ -271,6 +273,12 @@ AsyncFlow::TTask<void> UMyComponent::DoWork()
     co_await AsyncFlow::Delay(5.0f);
 }
 ```
+
+### Cancelable
+
+The `AcquireGuarded` awaiter supports `CancelAwaiter()` for expedited cancellation. When a coroutine waiting on
+`AcquireGuarded()` is cancelled via `TTask::Cancel()`, the waiter is removed from the semaphore queue immediately
+without consuming a permit.
 
 ---
 
