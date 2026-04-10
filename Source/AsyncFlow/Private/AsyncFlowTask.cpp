@@ -43,6 +43,7 @@ namespace AsyncFlow::Private
 
 	static thread_local FAsyncFlowState* GCurrentFlowState = nullptr;
 	static thread_local UObject* GCurrentWorldContext = nullptr;
+	static thread_local FAsyncFlowLatentAction* GCurrentLatentAction = nullptr;
 
 	FAsyncFlowState* GetCurrentFlowState()
 	{
@@ -62,6 +63,16 @@ namespace AsyncFlow::Private
 	void SetCurrentWorldContext(UObject* Ctx)
 	{
 		GCurrentWorldContext = Ctx;
+	}
+
+	FAsyncFlowLatentAction* GetCurrentLatentAction()
+	{
+		return GCurrentLatentAction;
+	}
+
+	void SetCurrentLatentAction(FAsyncFlowLatentAction* Action)
+	{
+		GCurrentLatentAction = Action;
 	}
 
 	UWorld* ResolveWorld(UObject* OptionalContext)

@@ -113,6 +113,25 @@ co_await OnTakeDamageDelegate;   // multicast — directly awaitable
 co_await MyUnicastDelegate;      // unicast — directly awaitable
 ```
 
+#### Dynamic Multicast Delegates
+
+Any `DECLARE_DYNAMIC_MULTICAST_DELEGATE` type can be awaited implicitly inside an AsyncFlow coroutine:
+
+```cpp
+// Implicit — just co_await the delegate reference
+co_await MyActor->OnSomeEvent;
+```
+
+Or explicitly via the wrapper:
+
+```cpp
+co_await AsyncFlow::WaitForDynamicDelegate(MyActor->OnSomeEvent);
+```
+
+This works by creating a transient bridge UObject with a `UFUNCTION` that binds to the dynamic delegate. The binding is automatically cleaned up after the first broadcast or on cancellation.
+
+> **Note:** Only the "delegate fired" event is captured — parameters are not forwarded. For typed dynamic delegates with parameters, use `AsyncFlow::Chain()` with manual binding.
+
 > The explicit wrappers (`AwaitFuture`, `AwaitUETask`, `WaitForDelegate`) are still available for backward compatibility
 > or when you need to pass additional options.
 
@@ -255,6 +274,58 @@ tick subsystem required.
 ```cpp
 co_await AsyncFlow::PlatformSeconds(0.5);
 ```
+
+> **Tip:** If you don't need to return to the game thread, use `PlatformSecondsAnyThread` instead for lower overhead.
+
+---
+
+## MoveToSimilarThread
+
+Records the current named-thread kind at construction and, when later `co_await`-ed, dispatches back to a thread of that kind. If execution is already on the recorded kind, the awaiter is a no-op.
+
+```cpp
+auto GoBack = AsyncFlow::MoveToSimilarThread(); // records "game thread"
+co_await AsyncFlow::MoveToTask();               // now on a worker
+// do background work ...
+co_await GoBack;                                // back to game thread
+```
+
+---
+
+## MoveToThreadPool
+
+Moves execution into a specific `FQueuedThreadPool`.
+
+```cpp
+co_await AsyncFlow::MoveToThreadPool(*GThreadPool, EQueuedWorkPriority::Normal);
+```
+
+`await_ready()` always returns `false` — the coroutine is always dispatched to the pool.
+
+---
+
+## PlatformSecondsAnyThread
+
+Like `PlatformSeconds` but resumes on the **worker thread** that performed the sleep instead of dispatching back to the game thread. More efficient for background pipelines.
+
+```cpp
+co_await AsyncFlow::PlatformSecondsAnyThread(2.0);
+// still on worker — call MoveToGameThread() if you need GT access
+```
+
+---
+
+## UntilPlatformTime / UntilPlatformTimeAnyThread
+
+Wait until `FPlatformTime::Seconds()` reaches an absolute target.
+
+```cpp
+double Deadline = FPlatformTime::Seconds() + 5.0;
+co_await AsyncFlow::UntilPlatformTime(Deadline);          // resumes on game thread
+co_await AsyncFlow::UntilPlatformTimeAnyThread(Deadline);  // resumes on worker
+```
+
+If the target has already passed, `await_ready()` returns `true` and the coroutine continues without suspending.
 
 ---
 

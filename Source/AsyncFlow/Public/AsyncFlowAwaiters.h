@@ -31,6 +31,7 @@
 
 #include "AsyncFlowTask.h"
 #include "AsyncFlowTickSubsystem.h"
+#include "AsyncFlowLatentAction.h"
 #include "AsyncFlowLogging.h"
 #include "Engine/World.h"
 #include "Engine/Engine.h"
@@ -131,6 +132,24 @@ namespace AsyncFlow
 				Handle.resume();
 				return;
 			}
+
+			// Latent fast-path: register condition directly with the latent action
+			FAsyncFlowLatentAction* LatentAction = Private::GetCurrentLatentAction();
+			if (LatentAction)
+			{
+				StoredHandle = Handle;
+				UWorld* W = ResolvedCtx->GetWorld();
+				const double TargetTime = W->GetTimeSeconds() + Seconds;
+				TWeakObjectPtr<UObject> WeakCtx = WorldContext;
+				LatentAction->SetCondition(
+					[WeakCtx, TargetTime]() -> bool {
+						UObject* Ctx = WeakCtx.Get();
+						return !Ctx || !Ctx->GetWorld() || Ctx->GetWorld()->GetTimeSeconds() >= TargetTime;
+					},
+					Handle, AliveFlag.Get());
+				return;
+			}
+
 			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
 			if (Subsystem)
 			{
@@ -221,6 +240,24 @@ namespace AsyncFlow
 				Handle.resume();
 				return;
 			}
+
+			// Latent fast-path: register condition directly with the latent action
+			FAsyncFlowLatentAction* LatentAction = Private::GetCurrentLatentAction();
+			if (LatentAction)
+			{
+				StoredHandle = Handle;
+				UWorld* W = ResolvedCtx->GetWorld();
+				const double TargetTime = W->GetRealTimeSeconds() + Seconds;
+				TWeakObjectPtr<UObject> WeakCtx = WorldContext;
+				LatentAction->SetCondition(
+					[WeakCtx, TargetTime]() -> bool {
+						UObject* Ctx = WeakCtx.Get();
+						return !Ctx || !Ctx->GetWorld() || Ctx->GetWorld()->GetRealTimeSeconds() >= TargetTime;
+					},
+					Handle, AliveFlag.Get());
+				return;
+			}
+
 			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
 			if (Subsystem)
 			{
@@ -310,6 +347,18 @@ namespace AsyncFlow
 				Handle.resume();
 				return;
 			}
+
+			// Latent fast-path: resume on next UpdateOperation call
+			FAsyncFlowLatentAction* LatentAction = Private::GetCurrentLatentAction();
+			if (LatentAction)
+			{
+				StoredHandle = Handle;
+				LatentAction->SetCondition(
+					[]() -> bool { return true; },
+					Handle, AliveFlag.Get());
+				return;
+			}
+
 			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
 			if (Subsystem)
 			{
@@ -392,6 +441,19 @@ namespace AsyncFlow
 				Handle.resume();
 				return;
 			}
+
+			// Latent fast-path: count down ticks via the latent action
+			FAsyncFlowLatentAction* LatentAction = Private::GetCurrentLatentAction();
+			if (LatentAction)
+			{
+				StoredHandle = Handle;
+				auto Counter = MakeShared<int32>(NumTicks);
+				LatentAction->SetCondition(
+					[Counter]() -> bool { return --(*Counter) <= 0; },
+					Handle, AliveFlag.Get());
+				return;
+			}
+
 			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
 			if (Subsystem)
 			{
@@ -486,6 +548,19 @@ namespace AsyncFlow
 				Handle.resume();
 				return;
 			}
+
+			// Latent fast-path: poll predicate via the latent action
+			FAsyncFlowLatentAction* LatentAction = Private::GetCurrentLatentAction();
+			if (LatentAction)
+			{
+				StoredHandle = Handle;
+				auto Pred = Predicate;
+				LatentAction->SetCondition(
+					[Pred]() -> bool { return Pred(); },
+					Handle, AliveFlag.Get());
+				return;
+			}
+
 			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
 			if (Subsystem)
 			{
@@ -555,6 +630,7 @@ namespace AsyncFlow
 		struct FWhenAllState
 		{
 			std::atomic<int32> Remaining;
+			std::atomic<bool> bResumed{ false };
 			std::coroutine_handle<> Continuation;
 
 			explicit FWhenAllState(int32 Count)
@@ -573,6 +649,7 @@ namespace AsyncFlow
 	struct FWhenAllAwaiter
 	{
 		TSharedPtr<Private::FWhenAllState> State;
+		TSharedPtr<TArray<TFunction<void()>>> CancelFunctions;
 
 		bool await_ready() const
 		{
@@ -588,6 +665,26 @@ namespace AsyncFlow
 
 		void await_resume() const
 		{
+		}
+
+		/** Cancel all inner tasks and resume the parent coroutine. */
+		void CancelAwaiter()
+		{
+			if (CancelFunctions)
+			{
+				for (auto& Fn : *CancelFunctions)
+				{
+					Fn();
+				}
+			}
+			bool bExpected = false;
+			if (State->bResumed.compare_exchange_strong(bExpected, true, std::memory_order_acq_rel))
+			{
+				if (State->Continuation && !State->Continuation.done())
+				{
+					State->Continuation.resume();
+				}
+			}
 		}
 	};
 
@@ -605,13 +702,24 @@ namespace AsyncFlow
 	{
 		constexpr int32 Count = sizeof...(TaskTypes);
 		TSharedPtr<Private::FWhenAllState> State = MakeShared<Private::FWhenAllState>(Count);
+		TSharedPtr<TArray<TFunction<void()>>> CancelFunctions = MakeShared<TArray<TFunction<void()>>>();
+		CancelFunctions->Reserve(Count);
 
-		auto SetupTask = [&State](auto& Task) {
+		auto SetupTask = [&State, &CancelFunctions](auto& Task) {
+			TSharedPtr<FAsyncFlowState> FlowState = Task.GetFlowState();
+			CancelFunctions->Add([FlowState]() { if (FlowState) { FlowState->Cancel(); } });
 			Task.OnComplete([State]() {
 				const int32 Prev = State->Remaining.fetch_sub(1, std::memory_order_acq_rel);
-				if (Prev == 1 && State->Continuation && !State->Continuation.done())
+				if (Prev == 1)
 				{
-					State->Continuation.resume();
+					bool bExpected = false;
+					if (State->bResumed.compare_exchange_strong(bExpected, true, std::memory_order_acq_rel))
+					{
+						if (State->Continuation && !State->Continuation.done())
+						{
+							State->Continuation.resume();
+						}
+					}
 				}
 			});
 			Task.StartManaged();
@@ -619,7 +727,7 @@ namespace AsyncFlow
 
 		(SetupTask(Tasks), ...);
 
-		return FWhenAllAwaiter{ State };
+		return FWhenAllAwaiter{ State, CancelFunctions };
 	}
 
 	// ============================================================================
@@ -636,6 +744,7 @@ namespace AsyncFlow
 		struct FWhenAnyState
 		{
 			std::atomic<bool> bTriggered{ false };
+			std::atomic<bool> bResumed{ false };
 			std::atomic<int32> WinnerIndex{ -1 };
 			std::coroutine_handle<> Continuation;
 		};
@@ -649,6 +758,7 @@ namespace AsyncFlow
 	struct FWhenAnyAwaiter
 	{
 		TSharedPtr<Private::FWhenAnyState> State;
+		TSharedPtr<TArray<TFunction<void()>>> CancelFunctions;
 
 		bool await_ready() const
 		{
@@ -665,6 +775,26 @@ namespace AsyncFlow
 		{
 			return State->WinnerIndex.load(std::memory_order_acquire);
 		}
+
+		/** Cancel all inner tasks and resume the parent coroutine. */
+		void CancelAwaiter()
+		{
+			if (CancelFunctions)
+			{
+				for (auto& Fn : *CancelFunctions)
+				{
+					Fn();
+				}
+			}
+			bool bExpected = false;
+			if (State->bResumed.compare_exchange_strong(bExpected, true, std::memory_order_acq_rel))
+			{
+				if (State->Continuation && !State->Continuation.done())
+				{
+					State->Continuation.resume();
+				}
+			}
+		}
 	};
 
 	/**
@@ -679,18 +809,26 @@ namespace AsyncFlow
 	[[nodiscard]] FWhenAnyAwaiter WhenAny(TaskTypes&... Tasks)
 	{
 		TSharedPtr<Private::FWhenAnyState> State = MakeShared<Private::FWhenAnyState>();
+		TSharedPtr<TArray<TFunction<void()>>> CancelFunctions = MakeShared<TArray<TFunction<void()>>>();
+		CancelFunctions->Reserve(sizeof...(TaskTypes));
 
 		int32 Index = 0;
-		auto SetupTask = [&State, &Index](auto& Task) {
+		auto SetupTask = [&State, &Index, &CancelFunctions](auto& Task) {
 			const int32 MyIndex = Index++;
+			TSharedPtr<FAsyncFlowState> FlowState = Task.GetFlowState();
+			CancelFunctions->Add([FlowState]() { if (FlowState) { FlowState->Cancel(); } });
 			Task.OnComplete([State, MyIndex]() {
 				bool bExpected = false;
 				if (State->bTriggered.compare_exchange_strong(bExpected, true, std::memory_order_acq_rel))
 				{
 					State->WinnerIndex.store(MyIndex, std::memory_order_release);
-					if (State->Continuation && !State->Continuation.done())
+					bool bResumeExpected = false;
+					if (State->bResumed.compare_exchange_strong(bResumeExpected, true, std::memory_order_acq_rel))
 					{
-						State->Continuation.resume();
+						if (State->Continuation && !State->Continuation.done())
+						{
+							State->Continuation.resume();
+						}
 					}
 				}
 			});
@@ -699,7 +837,7 @@ namespace AsyncFlow
 
 		(SetupTask(Tasks), ...);
 
-		return FWhenAnyAwaiter{ State };
+		return FWhenAnyAwaiter{ State, CancelFunctions };
 	}
 
 	// ============================================================================
@@ -743,6 +881,26 @@ namespace AsyncFlow
 		{
 			return State->WinnerIndex.load(std::memory_order_acquire);
 		}
+
+		/** Cancel all inner tasks (including the winner) and resume the parent. */
+		void CancelAwaiter()
+		{
+			if (CancelFunctions)
+			{
+				for (auto& Fn : *CancelFunctions)
+				{
+					Fn();
+				}
+			}
+			bool bExpected = false;
+			if (State->bResumed.compare_exchange_strong(bExpected, true, std::memory_order_acq_rel))
+			{
+				if (State->Continuation && !State->Continuation.done())
+				{
+					State->Continuation.resume();
+				}
+			}
+		}
 	};
 
 	/**
@@ -778,9 +936,13 @@ namespace AsyncFlow
 							(*CancelFunctions)[Idx]();
 						}
 					}
-					if (State->Continuation && !State->Continuation.done())
+					bool bResumeExpected = false;
+					if (State->bResumed.compare_exchange_strong(bResumeExpected, true, std::memory_order_acq_rel))
 					{
-						State->Continuation.resume();
+						if (State->Continuation && !State->Continuation.done())
+						{
+							State->Continuation.resume();
+						}
 					}
 				}
 			});
@@ -807,31 +969,50 @@ namespace AsyncFlow
 	{
 		const int32 Count = Tasks.Num();
 		TSharedPtr<Private::FWhenAllState> State = MakeShared<Private::FWhenAllState>(Count);
+		TSharedPtr<TArray<TFunction<void()>>> CancelFunctions = MakeShared<TArray<TFunction<void()>>>();
+		CancelFunctions->Reserve(Count);
 
 		for (TTask<void>* Task : Tasks)
 		{
 			if (Task)
 			{
+				TSharedPtr<FAsyncFlowState> FlowState = Task->GetFlowState();
+				CancelFunctions->Add([FlowState]() { if (FlowState) { FlowState->Cancel(); } });
 				Task->OnComplete([State]() {
 					const int32 Prev = State->Remaining.fetch_sub(1, std::memory_order_acq_rel);
-					if (Prev == 1 && State->Continuation && !State->Continuation.done())
+					if (Prev == 1)
 					{
-						State->Continuation.resume();
+						bool bExpected = false;
+						if (State->bResumed.compare_exchange_strong(bExpected, true, std::memory_order_acq_rel))
+						{
+							if (State->Continuation && !State->Continuation.done())
+							{
+								State->Continuation.resume();
+							}
+						}
 					}
 				});
 				Task->StartManaged();
 			}
 			else
 			{
+				CancelFunctions->Add([]() {});
 				const int32 Prev = State->Remaining.fetch_sub(1, std::memory_order_acq_rel);
-				if (Prev == 1 && State->Continuation && !State->Continuation.done())
+				if (Prev == 1)
 				{
-					State->Continuation.resume();
+					bool bExpected = false;
+					if (State->bResumed.compare_exchange_strong(bExpected, true, std::memory_order_acq_rel))
+					{
+						if (State->Continuation && !State->Continuation.done())
+						{
+							State->Continuation.resume();
+						}
+					}
 				}
 			}
 		}
 
-		return FWhenAllAwaiter{ State };
+		return FWhenAllAwaiter{ State, CancelFunctions };
 	}
 
 	/**
@@ -843,30 +1024,39 @@ namespace AsyncFlow
 	[[nodiscard]] inline FWhenAnyAwaiter WhenAny(TArray<TTask<void>*>& Tasks)
 	{
 		TSharedPtr<Private::FWhenAnyState> State = MakeShared<Private::FWhenAnyState>();
+		TSharedPtr<TArray<TFunction<void()>>> CancelFunctions = MakeShared<TArray<TFunction<void()>>>();
+		CancelFunctions->Reserve(Tasks.Num());
 
 		for (int32 Idx = 0; Idx < Tasks.Num(); ++Idx)
 		{
 			TTask<void>* Task = Tasks[Idx];
 			if (!Task)
 			{
+				CancelFunctions->Add([]() {});
 				continue;
 			}
+			TSharedPtr<FAsyncFlowState> FlowState = Task->GetFlowState();
+			CancelFunctions->Add([FlowState]() { if (FlowState) { FlowState->Cancel(); } });
 			const int32 MyIndex = Idx;
 			Task->OnComplete([State, MyIndex]() {
 				bool bExpected = false;
 				if (State->bTriggered.compare_exchange_strong(bExpected, true, std::memory_order_acq_rel))
 				{
 					State->WinnerIndex.store(MyIndex, std::memory_order_release);
-					if (State->Continuation && !State->Continuation.done())
+					bool bResumeExpected = false;
+					if (State->bResumed.compare_exchange_strong(bResumeExpected, true, std::memory_order_acq_rel))
 					{
-						State->Continuation.resume();
+						if (State->Continuation && !State->Continuation.done())
+						{
+							State->Continuation.resume();
+						}
 					}
 				}
 			});
 			Task->StartManaged();
 		}
 
-		return FWhenAnyAwaiter{ State };
+		return FWhenAnyAwaiter{ State, CancelFunctions };
 	}
 
 	/**
@@ -915,9 +1105,13 @@ namespace AsyncFlow
 							(*CancelFunctions)[CIdx]();
 						}
 					}
-					if (State->Continuation && !State->Continuation.done())
+					bool bResumeExpected = false;
+					if (State->bResumed.compare_exchange_strong(bResumeExpected, true, std::memory_order_acq_rel))
 					{
-						State->Continuation.resume();
+						if (State->Continuation && !State->Continuation.done())
+						{
+							State->Continuation.resume();
+						}
 					}
 				}
 			});
@@ -926,6 +1120,243 @@ namespace AsyncFlow
 
 		return FRaceAwaiter{ State, CancelFunctions };
 	}
+
+	// ============================================================================
+	// Latent::WhenAll / Latent::WhenAny — UObject-lifetime-tracked composition
+	// ============================================================================
+
+	/**
+	 * Latent composition helpers that tie inner task lifetimes to a UObject.
+	 *
+	 * When the context UObject is destroyed, all inner tasks are cancelled
+	 * automatically via a contract check. Use these in latent coroutines
+	 * (spawned from Blueprint) where actor/component lifetime matters.
+	 *
+	 * The returned awaiters are the same FWhenAllAwaiter / FWhenAnyAwaiter
+	 * types — they just pre-register a validity contract on each inner task.
+	 */
+	namespace Latent
+	{
+		/**
+		 * Wait for ALL tasks to complete, with UObject lifetime tracking.
+		 *
+		 * If the context object is destroyed, all inner tasks are cancelled.
+		 *
+		 * @param Context  UObject whose lifetime gates the tasks (typically 'this').
+		 * @param Tasks    TTask<void> references (variadic).
+		 * @return         An awaiter — co_await yields void.
+		 */
+		template <typename... TaskTypes>
+		[[nodiscard]] FWhenAllAwaiter WhenAll(UObject* Context, TaskTypes&... Tasks)
+		{
+			constexpr int32 Count = sizeof...(TaskTypes);
+			TSharedPtr<Private::FWhenAllState> State = MakeShared<Private::FWhenAllState>(Count);
+			TSharedPtr<TArray<TFunction<void()>>> CancelFunctions = MakeShared<TArray<TFunction<void()>>>();
+			CancelFunctions->Reserve(Count);
+
+			TWeakObjectPtr<UObject> WeakCtx(Context);
+
+			auto SetupTask = [&State, &CancelFunctions, WeakCtx](auto& Task) {
+				TSharedPtr<FAsyncFlowState> FlowState = Task.GetFlowState();
+
+				// Add lifetime contract — inner task cancels if context dies
+				if (FlowState)
+				{
+					FlowState->AddContract([WeakCtx]() { return WeakCtx.IsValid(); });
+				}
+
+				CancelFunctions->Add([FlowState]() { if (FlowState) { FlowState->Cancel(); } });
+				Task.OnComplete([State]() {
+					const int32 Prev = State->Remaining.fetch_sub(1, std::memory_order_acq_rel);
+					if (Prev == 1)
+					{
+						bool bExpected = false;
+						if (State->bResumed.compare_exchange_strong(bExpected, true, std::memory_order_acq_rel))
+						{
+							if (State->Continuation && !State->Continuation.done())
+							{
+								State->Continuation.resume();
+							}
+						}
+					}
+				});
+				Task.StartManaged();
+			};
+
+			(SetupTask(Tasks), ...);
+
+			return FWhenAllAwaiter{ State, CancelFunctions };
+		}
+
+		/**
+		 * Wait for ALL tasks to complete (TArray overload), with UObject lifetime tracking.
+		 *
+		 * @param Context  UObject whose lifetime gates the tasks.
+		 * @param Tasks    Array of pointers to TTask<void>. Null entries are counted as immediately complete.
+		 * @return         An awaiter — co_await yields void.
+		 */
+		[[nodiscard]] inline FWhenAllAwaiter WhenAll(UObject* Context, TArray<TTask<void>*>& Tasks)
+		{
+			const int32 Count = Tasks.Num();
+			TSharedPtr<Private::FWhenAllState> State = MakeShared<Private::FWhenAllState>(Count);
+			TSharedPtr<TArray<TFunction<void()>>> CancelFunctions = MakeShared<TArray<TFunction<void()>>>();
+			CancelFunctions->Reserve(Count);
+
+			TWeakObjectPtr<UObject> WeakCtx(Context);
+
+			for (TTask<void>* Task : Tasks)
+			{
+				if (Task)
+				{
+					TSharedPtr<FAsyncFlowState> FlowState = Task->GetFlowState();
+					if (FlowState)
+					{
+						FlowState->AddContract([WeakCtx]() { return WeakCtx.IsValid(); });
+					}
+					CancelFunctions->Add([FlowState]() { if (FlowState) { FlowState->Cancel(); } });
+					Task->OnComplete([State]() {
+						const int32 Prev = State->Remaining.fetch_sub(1, std::memory_order_acq_rel);
+						if (Prev == 1)
+						{
+							bool bExpected = false;
+							if (State->bResumed.compare_exchange_strong(bExpected, true, std::memory_order_acq_rel))
+							{
+								if (State->Continuation && !State->Continuation.done())
+								{
+									State->Continuation.resume();
+								}
+							}
+						}
+					});
+					Task->StartManaged();
+				}
+				else
+				{
+					CancelFunctions->Add([]() {});
+					const int32 Prev = State->Remaining.fetch_sub(1, std::memory_order_acq_rel);
+					if (Prev == 1)
+					{
+						bool bExpected = false;
+						if (State->bResumed.compare_exchange_strong(bExpected, true, std::memory_order_acq_rel))
+						{
+							if (State->Continuation && !State->Continuation.done())
+							{
+								State->Continuation.resume();
+							}
+						}
+					}
+				}
+			}
+
+			return FWhenAllAwaiter{ State, CancelFunctions };
+		}
+
+		/**
+		 * Wait for ANY task to complete first, with UObject lifetime tracking.
+		 *
+		 * If the context object is destroyed, all inner tasks are cancelled.
+		 *
+		 * @param Context  UObject whose lifetime gates the tasks.
+		 * @param Tasks    TTask<void> references (variadic).
+		 * @return         An awaiter — co_await yields the 0-based winner index.
+		 */
+		template <typename... TaskTypes>
+		[[nodiscard]] FWhenAnyAwaiter WhenAny(UObject* Context, TaskTypes&... Tasks)
+		{
+			TSharedPtr<Private::FWhenAnyState> State = MakeShared<Private::FWhenAnyState>();
+			TSharedPtr<TArray<TFunction<void()>>> CancelFunctions = MakeShared<TArray<TFunction<void()>>>();
+			CancelFunctions->Reserve(sizeof...(TaskTypes));
+
+			TWeakObjectPtr<UObject> WeakCtx(Context);
+
+			int32 Index = 0;
+			auto SetupTask = [&State, &Index, &CancelFunctions, WeakCtx](auto& Task) {
+				const int32 MyIndex = Index++;
+				TSharedPtr<FAsyncFlowState> FlowState = Task.GetFlowState();
+
+				if (FlowState)
+				{
+					FlowState->AddContract([WeakCtx]() { return WeakCtx.IsValid(); });
+				}
+
+				CancelFunctions->Add([FlowState]() { if (FlowState) { FlowState->Cancel(); } });
+				Task.OnComplete([State, MyIndex]() {
+					bool bExpected = false;
+					if (State->bTriggered.compare_exchange_strong(bExpected, true, std::memory_order_acq_rel))
+					{
+						State->WinnerIndex.store(MyIndex, std::memory_order_release);
+						bool bResumeExpected = false;
+						if (State->bResumed.compare_exchange_strong(bResumeExpected, true, std::memory_order_acq_rel))
+						{
+							if (State->Continuation && !State->Continuation.done())
+							{
+								State->Continuation.resume();
+							}
+						}
+					}
+				});
+				Task.StartManaged();
+			};
+
+			(SetupTask(Tasks), ...);
+
+			return FWhenAnyAwaiter{ State, CancelFunctions };
+		}
+
+		/**
+		 * Wait for ANY task to complete first (TArray overload), with UObject lifetime tracking.
+		 *
+		 * @param Context  UObject whose lifetime gates the tasks.
+		 * @param Tasks    Array of pointers to TTask<void>. Null entries are skipped.
+		 * @return         An awaiter — co_await yields the 0-based winner index.
+		 */
+		[[nodiscard]] inline FWhenAnyAwaiter WhenAny(UObject* Context, TArray<TTask<void>*>& Tasks)
+		{
+			TSharedPtr<Private::FWhenAnyState> State = MakeShared<Private::FWhenAnyState>();
+			TSharedPtr<TArray<TFunction<void()>>> CancelFunctions = MakeShared<TArray<TFunction<void()>>>();
+			CancelFunctions->Reserve(Tasks.Num());
+
+			TWeakObjectPtr<UObject> WeakCtx(Context);
+
+			for (int32 Idx = 0; Idx < Tasks.Num(); ++Idx)
+			{
+				TTask<void>* Task = Tasks[Idx];
+				if (Task)
+				{
+					TSharedPtr<FAsyncFlowState> FlowState = Task->GetFlowState();
+					if (FlowState)
+					{
+						FlowState->AddContract([WeakCtx]() { return WeakCtx.IsValid(); });
+					}
+					CancelFunctions->Add([FlowState]() { if (FlowState) { FlowState->Cancel(); } });
+					const int32 MyIndex = Idx;
+					Task->OnComplete([State, MyIndex]() {
+						bool bExpected = false;
+						if (State->bTriggered.compare_exchange_strong(bExpected, true, std::memory_order_acq_rel))
+						{
+							State->WinnerIndex.store(MyIndex, std::memory_order_release);
+							bool bResumeExpected = false;
+							if (State->bResumed.compare_exchange_strong(bResumeExpected, true, std::memory_order_acq_rel))
+							{
+								if (State->Continuation && !State->Continuation.done())
+								{
+									State->Continuation.resume();
+								}
+							}
+						}
+					});
+					Task->StartManaged();
+				}
+				else
+				{
+					CancelFunctions->Add([]() {});
+				}
+			}
+
+			return FWhenAnyAwaiter{ State, CancelFunctions };
+		}
+
+	} // namespace Latent
 
 	// ============================================================================
 	// UnpausedDelay — suspends using unpaused time (continues during pause)
@@ -963,6 +1394,24 @@ namespace AsyncFlow
 				Handle.resume();
 				return;
 			}
+
+			// Latent fast-path: register condition directly with the latent action
+			FAsyncFlowLatentAction* LatentAction = Private::GetCurrentLatentAction();
+			if (LatentAction)
+			{
+				StoredHandle = Handle;
+				UWorld* W = ResolvedCtx->GetWorld();
+				const double TargetTime = W->GetUnpausedTimeSeconds() + Seconds;
+				TWeakObjectPtr<UObject> WeakCtx = WorldContext;
+				LatentAction->SetCondition(
+					[WeakCtx, TargetTime]() -> bool {
+						UObject* Ctx = WeakCtx.Get();
+						return !Ctx || !Ctx->GetWorld() || Ctx->GetWorld()->GetUnpausedTimeSeconds() >= TargetTime;
+					},
+					Handle, AliveFlag.Get());
+				return;
+			}
+
 			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
 			if (Subsystem)
 			{
@@ -1053,6 +1502,24 @@ namespace AsyncFlow
 				Handle.resume();
 				return;
 			}
+
+			// Latent fast-path: register condition directly with the latent action
+			FAsyncFlowLatentAction* LatentAction = Private::GetCurrentLatentAction();
+			if (LatentAction)
+			{
+				StoredHandle = Handle;
+				UWorld* W = ResolvedCtx->GetWorld();
+				const double TargetTime = W->GetAudioTimeSeconds() + Seconds;
+				TWeakObjectPtr<UObject> WeakCtx = WorldContext;
+				LatentAction->SetCondition(
+					[WeakCtx, TargetTime]() -> bool {
+						UObject* Ctx = WeakCtx.Get();
+						return !Ctx || !Ctx->GetWorld() || Ctx->GetWorld()->GetAudioTimeSeconds() >= TargetTime;
+					},
+					Handle, AliveFlag.Get());
+				return;
+			}
+
 			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
 			if (Subsystem)
 			{
@@ -1105,6 +1572,393 @@ namespace AsyncFlow
 	[[deprecated("Use AudioDelay(Seconds) or AudioDelay(Seconds, WorldContext)")]] [[nodiscard]] inline FAudioDelayAwaiter AudioDelay(UObject* WorldContext, float Seconds)
 	{
 		return AudioDelay(Seconds, WorldContext);
+	}
+
+	// ============================================================================
+	// UntilTime — suspend until an absolute game-time target
+	// ============================================================================
+
+	/**
+	 * Awaiter that suspends until UWorld::GetTimeSeconds() >= TargetTime.
+	 * Respects global time dilation and pause. If the target time has already
+	 * passed, await_ready returns true (no-op).
+	 */
+	struct FUntilTimeAwaiter
+	{
+		TWeakObjectPtr<UObject> WorldContext;
+		double TargetTime = 0.0;
+		Private::FAwaiterAliveFlag AliveFlag;
+		mutable std::coroutine_handle<> StoredHandle;
+		mutable UAsyncFlowTickSubsystem* StoredSubsystem = nullptr;
+
+		FUntilTimeAwaiter() = default;
+		FUntilTimeAwaiter(FUntilTimeAwaiter&&) noexcept = default;
+		FUntilTimeAwaiter& operator=(FUntilTimeAwaiter&&) noexcept = default;
+		FUntilTimeAwaiter(const FUntilTimeAwaiter&) = delete;
+		FUntilTimeAwaiter& operator=(const FUntilTimeAwaiter&) = delete;
+
+		bool await_ready() const
+		{
+			UObject* Ctx = WorldContext.Get();
+			if (!Ctx || !Ctx->GetWorld()) return true;
+			return Ctx->GetWorld()->GetTimeSeconds() >= TargetTime;
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle) const
+		{
+			UObject* ResolvedCtx = WorldContext.Get();
+			if (!ResolvedCtx || !ResolvedCtx->GetWorld())
+			{
+				Handle.resume();
+				return;
+			}
+
+			// Latent fast-path
+			FAsyncFlowLatentAction* LatentAction = Private::GetCurrentLatentAction();
+			if (LatentAction)
+			{
+				StoredHandle = Handle;
+				TWeakObjectPtr<UObject> WeakCtx = WorldContext;
+				const double Target = TargetTime;
+				LatentAction->SetCondition(
+					[WeakCtx, Target]() -> bool {
+						UObject* Ctx = WeakCtx.Get();
+						return !Ctx || !Ctx->GetWorld() || Ctx->GetWorld()->GetTimeSeconds() >= Target;
+					},
+					Handle, AliveFlag.Get());
+				return;
+			}
+
+			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (Subsystem)
+			{
+				StoredHandle = Handle;
+				StoredSubsystem = Subsystem;
+				Subsystem->ScheduleUntilTime(Handle, TargetTime, AliveFlag.Get());
+			}
+			else
+			{
+				Handle.resume();
+			}
+		}
+
+		void CancelAwaiter()
+		{
+			if (StoredHandle)
+			{
+				if (StoredSubsystem)
+				{
+					StoredSubsystem->CancelHandle(StoredHandle);
+					StoredSubsystem = nullptr;
+				}
+				auto H = StoredHandle;
+				StoredHandle = nullptr;
+				H.resume();
+			}
+		}
+
+		void await_resume() const {}
+	};
+
+	/**
+	 * Suspend until game time reaches TargetTime.
+	 * @param InTargetTime  Absolute game-time target (UWorld::GetTimeSeconds()).
+	 * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
+	 */
+	[[nodiscard]] inline FUntilTimeAwaiter UntilTime(double InTargetTime, UObject* WorldContext = nullptr)
+	{
+		FUntilTimeAwaiter Aw;
+		Aw.WorldContext = WorldContext ? WorldContext : Private::GetCurrentWorldContext();
+		Aw.TargetTime = InTargetTime;
+		return Aw;
+	}
+
+	// ============================================================================
+	// UntilRealTime — suspend until an absolute real-time target
+	// ============================================================================
+
+	/**
+	 * Awaiter that suspends until FPlatformTime::Seconds() >= TargetTime.
+	 * Ignores pause and time dilation.
+	 */
+	struct FUntilRealTimeAwaiter
+	{
+		TWeakObjectPtr<UObject> WorldContext;
+		double TargetTime = 0.0;
+		Private::FAwaiterAliveFlag AliveFlag;
+		mutable std::coroutine_handle<> StoredHandle;
+		mutable UAsyncFlowTickSubsystem* StoredSubsystem = nullptr;
+
+		FUntilRealTimeAwaiter() = default;
+		FUntilRealTimeAwaiter(FUntilRealTimeAwaiter&&) noexcept = default;
+		FUntilRealTimeAwaiter& operator=(FUntilRealTimeAwaiter&&) noexcept = default;
+		FUntilRealTimeAwaiter(const FUntilRealTimeAwaiter&) = delete;
+		FUntilRealTimeAwaiter& operator=(const FUntilRealTimeAwaiter&) = delete;
+
+		bool await_ready() const
+		{
+			return FPlatformTime::Seconds() >= TargetTime;
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle) const
+		{
+			UObject* ResolvedCtx = WorldContext.Get();
+			if (!ResolvedCtx || !ResolvedCtx->GetWorld())
+			{
+				Handle.resume();
+				return;
+			}
+
+			// Latent fast-path
+			FAsyncFlowLatentAction* LatentAction = Private::GetCurrentLatentAction();
+			if (LatentAction)
+			{
+				StoredHandle = Handle;
+				const double Target = TargetTime;
+				LatentAction->SetCondition(
+					[Target]() -> bool { return FPlatformTime::Seconds() >= Target; },
+					Handle, AliveFlag.Get());
+				return;
+			}
+
+			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (Subsystem)
+			{
+				StoredHandle = Handle;
+				StoredSubsystem = Subsystem;
+				Subsystem->ScheduleUntilRealTime(Handle, TargetTime, AliveFlag.Get());
+			}
+			else
+			{
+				Handle.resume();
+			}
+		}
+
+		void CancelAwaiter()
+		{
+			if (StoredHandle)
+			{
+				if (StoredSubsystem)
+				{
+					StoredSubsystem->CancelHandle(StoredHandle);
+					StoredSubsystem = nullptr;
+				}
+				auto H = StoredHandle;
+				StoredHandle = nullptr;
+				H.resume();
+			}
+		}
+
+		void await_resume() const {}
+	};
+
+	/**
+	 * Suspend until real time reaches TargetTime.
+	 * @param InTargetTime  Absolute real-time target (FPlatformTime::Seconds()).
+	 * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
+	 */
+	[[nodiscard]] inline FUntilRealTimeAwaiter UntilRealTime(double InTargetTime, UObject* WorldContext = nullptr)
+	{
+		FUntilRealTimeAwaiter Aw;
+		Aw.WorldContext = WorldContext ? WorldContext : Private::GetCurrentWorldContext();
+		Aw.TargetTime = InTargetTime;
+		return Aw;
+	}
+
+	// ============================================================================
+	// UntilUnpausedTime — suspend until an absolute unpaused-time target
+	// ============================================================================
+
+	/**
+	 * Awaiter that suspends until UWorld::GetUnpausedTimeSeconds() >= TargetTime.
+	 * Ticks during pause, respects global dilation.
+	 */
+	struct FUntilUnpausedTimeAwaiter
+	{
+		TWeakObjectPtr<UObject> WorldContext;
+		double TargetTime = 0.0;
+		Private::FAwaiterAliveFlag AliveFlag;
+		mutable std::coroutine_handle<> StoredHandle;
+		mutable UAsyncFlowTickSubsystem* StoredSubsystem = nullptr;
+
+		FUntilUnpausedTimeAwaiter() = default;
+		FUntilUnpausedTimeAwaiter(FUntilUnpausedTimeAwaiter&&) noexcept = default;
+		FUntilUnpausedTimeAwaiter& operator=(FUntilUnpausedTimeAwaiter&&) noexcept = default;
+		FUntilUnpausedTimeAwaiter(const FUntilUnpausedTimeAwaiter&) = delete;
+		FUntilUnpausedTimeAwaiter& operator=(const FUntilUnpausedTimeAwaiter&) = delete;
+
+		bool await_ready() const
+		{
+			UObject* Ctx = WorldContext.Get();
+			if (!Ctx || !Ctx->GetWorld()) return true;
+			return Ctx->GetWorld()->GetUnpausedTimeSeconds() >= TargetTime;
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle) const
+		{
+			UObject* ResolvedCtx = WorldContext.Get();
+			if (!ResolvedCtx || !ResolvedCtx->GetWorld())
+			{
+				Handle.resume();
+				return;
+			}
+
+			// Latent fast-path
+			FAsyncFlowLatentAction* LatentAction = Private::GetCurrentLatentAction();
+			if (LatentAction)
+			{
+				StoredHandle = Handle;
+				TWeakObjectPtr<UObject> WeakCtx = WorldContext;
+				const double Target = TargetTime;
+				LatentAction->SetCondition(
+					[WeakCtx, Target]() -> bool {
+						UObject* Ctx = WeakCtx.Get();
+						return !Ctx || !Ctx->GetWorld() || Ctx->GetWorld()->GetUnpausedTimeSeconds() >= Target;
+					},
+					Handle, AliveFlag.Get());
+				return;
+			}
+
+			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (Subsystem)
+			{
+				StoredHandle = Handle;
+				StoredSubsystem = Subsystem;
+				Subsystem->ScheduleUntilUnpausedTime(Handle, TargetTime, AliveFlag.Get());
+			}
+			else
+			{
+				Handle.resume();
+			}
+		}
+
+		void CancelAwaiter()
+		{
+			if (StoredHandle)
+			{
+				if (StoredSubsystem)
+				{
+					StoredSubsystem->CancelHandle(StoredHandle);
+					StoredSubsystem = nullptr;
+				}
+				auto H = StoredHandle;
+				StoredHandle = nullptr;
+				H.resume();
+			}
+		}
+
+		void await_resume() const {}
+	};
+
+	/**
+	 * Suspend until unpaused time reaches TargetTime.
+	 * @param InTargetTime  Absolute unpaused-time target (UWorld::GetUnpausedTimeSeconds()).
+	 * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
+	 */
+	[[nodiscard]] inline FUntilUnpausedTimeAwaiter UntilUnpausedTime(double InTargetTime, UObject* WorldContext = nullptr)
+	{
+		FUntilUnpausedTimeAwaiter Aw;
+		Aw.WorldContext = WorldContext ? WorldContext : Private::GetCurrentWorldContext();
+		Aw.TargetTime = InTargetTime;
+		return Aw;
+	}
+
+	// ============================================================================
+	// UntilAudioTime — suspend until an absolute audio-time target
+	// ============================================================================
+
+	/**
+	 * Awaiter that suspends until UWorld::GetAudioTimeSeconds() >= TargetTime.
+	 * Uses the audio engine clock.
+	 */
+	struct FUntilAudioTimeAwaiter
+	{
+		TWeakObjectPtr<UObject> WorldContext;
+		double TargetTime = 0.0;
+		Private::FAwaiterAliveFlag AliveFlag;
+		mutable std::coroutine_handle<> StoredHandle;
+		mutable UAsyncFlowTickSubsystem* StoredSubsystem = nullptr;
+
+		FUntilAudioTimeAwaiter() = default;
+		FUntilAudioTimeAwaiter(FUntilAudioTimeAwaiter&&) noexcept = default;
+		FUntilAudioTimeAwaiter& operator=(FUntilAudioTimeAwaiter&&) noexcept = default;
+		FUntilAudioTimeAwaiter(const FUntilAudioTimeAwaiter&) = delete;
+		FUntilAudioTimeAwaiter& operator=(const FUntilAudioTimeAwaiter&) = delete;
+
+		bool await_ready() const
+		{
+			UObject* Ctx = WorldContext.Get();
+			if (!Ctx || !Ctx->GetWorld()) return true;
+			return Ctx->GetWorld()->GetAudioTimeSeconds() >= TargetTime;
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle) const
+		{
+			UObject* ResolvedCtx = WorldContext.Get();
+			if (!ResolvedCtx || !ResolvedCtx->GetWorld())
+			{
+				Handle.resume();
+				return;
+			}
+
+			// Latent fast-path
+			FAsyncFlowLatentAction* LatentAction = Private::GetCurrentLatentAction();
+			if (LatentAction)
+			{
+				StoredHandle = Handle;
+				TWeakObjectPtr<UObject> WeakCtx = WorldContext;
+				const double Target = TargetTime;
+				LatentAction->SetCondition(
+					[WeakCtx, Target]() -> bool {
+						UObject* Ctx = WeakCtx.Get();
+						return !Ctx || !Ctx->GetWorld() || Ctx->GetWorld()->GetAudioTimeSeconds() >= Target;
+					},
+					Handle, AliveFlag.Get());
+				return;
+			}
+
+			UAsyncFlowTickSubsystem* Subsystem = ResolvedCtx->GetWorld()->GetSubsystem<UAsyncFlowTickSubsystem>();
+			if (Subsystem)
+			{
+				StoredHandle = Handle;
+				StoredSubsystem = Subsystem;
+				Subsystem->ScheduleUntilAudioTime(Handle, TargetTime, AliveFlag.Get());
+			}
+			else
+			{
+				Handle.resume();
+			}
+		}
+
+		void CancelAwaiter()
+		{
+			if (StoredHandle)
+			{
+				if (StoredSubsystem)
+				{
+					StoredSubsystem->CancelHandle(StoredHandle);
+					StoredSubsystem = nullptr;
+				}
+				auto H = StoredHandle;
+				StoredHandle = nullptr;
+				H.resume();
+			}
+		}
+
+		void await_resume() const {}
+	};
+
+	/**
+	 * Suspend until audio time reaches TargetTime.
+	 * @param InTargetTime  Absolute audio-time target (UWorld::GetAudioTimeSeconds()).
+	 * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
+	 */
+	[[nodiscard]] inline FUntilAudioTimeAwaiter UntilAudioTime(double InTargetTime, UObject* WorldContext = nullptr)
+	{
+		FUntilAudioTimeAwaiter Aw;
+		Aw.WorldContext = WorldContext ? WorldContext : Private::GetCurrentWorldContext();
+		Aw.TargetTime = InTargetTime;
+		return Aw;
 	}
 
 	// ============================================================================

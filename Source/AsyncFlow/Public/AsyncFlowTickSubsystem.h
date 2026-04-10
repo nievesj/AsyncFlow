@@ -228,6 +228,40 @@ public:
 	 */
 	void CancelHandle(std::coroutine_handle<> Handle);
 
+	// --- Absolute-time scheduling (target time directly, no delta) ---
+
+	/**
+	 * Schedule resume when game time >= TargetTime.
+	 * @param Handle      The suspended coroutine handle.
+	 * @param TargetTime  Absolute game-time target (UWorld::GetTimeSeconds()).
+	 * @param InAlive     Shared alive flag from the awaiter.
+	 */
+	void ScheduleUntilTime(std::coroutine_handle<> Handle, double TargetTime, TSharedPtr<bool> InAlive = nullptr);
+
+	/**
+	 * Schedule resume when real time >= TargetTime.
+	 * @param Handle      The suspended coroutine handle.
+	 * @param TargetTime  Absolute real-time target (FPlatformTime::Seconds()).
+	 * @param InAlive     Shared alive flag from the awaiter.
+	 */
+	void ScheduleUntilRealTime(std::coroutine_handle<> Handle, double TargetTime, TSharedPtr<bool> InAlive = nullptr);
+
+	/**
+	 * Schedule resume when unpaused time >= TargetTime.
+	 * @param Handle      The suspended coroutine handle.
+	 * @param TargetTime  Absolute unpaused-time target.
+	 * @param InAlive     Shared alive flag from the awaiter.
+	 */
+	void ScheduleUntilUnpausedTime(std::coroutine_handle<> Handle, double TargetTime, TSharedPtr<bool> InAlive = nullptr);
+
+	/**
+	 * Schedule resume when audio time >= TargetTime.
+	 * @param Handle      The suspended coroutine handle.
+	 * @param TargetTime  Absolute audio-time target.
+	 * @param InAlive     Shared alive flag from the awaiter.
+	 */
+	void ScheduleUntilAudioTime(std::coroutine_handle<> Handle, double TargetTime, TSharedPtr<bool> InAlive = nullptr);
+
 private:
 	TArray<AsyncFlow::Private::FDelayedResume> DelayedResumes;
 	TArray<AsyncFlow::Private::FActorDilatedResume> ActorDilatedResumes;

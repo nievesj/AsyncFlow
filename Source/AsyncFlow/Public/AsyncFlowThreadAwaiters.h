@@ -40,6 +40,8 @@
 #include "AsyncFlowAwaiters.h"
 #include "Async/Async.h"
 #include "Async/ParallelFor.h"
+#include "HAL/PlatformProcess.h"
+#include "Misc/QueuedThreadPool.h"
 #include "Templates/Function.h"
 #include "Templates/SharedPointer.h"
 
@@ -92,6 +94,42 @@ namespace AsyncFlow
 			bool bAlive = true;
 		};
 
+	} // namespace Private
+
+	// Forward-declare FQueuedThreadPool helper in Private
+	namespace Private
+	{
+		/**
+		 * IQueuedWork implementation that resumes a coroutine handle.
+		 * Used by MoveToThreadPool to enqueue work on FQueuedThreadPool.
+		 */
+		class FCoroutineQueuedWork : public IQueuedWork
+		{
+		public:
+			FCoroutineQueuedWork(std::coroutine_handle<> InHandle, TSharedPtr<bool> InAlive)
+				: Handle(InHandle)
+				, Alive(MoveTemp(InAlive))
+			{
+			}
+
+			virtual void DoThreadedWork() override
+			{
+				if (*Alive)
+				{
+					Handle.resume();
+				}
+				delete this;
+			}
+
+			virtual void Abandon() override
+			{
+				delete this;
+			}
+
+		private:
+			std::coroutine_handle<> Handle;
+			TSharedPtr<bool> Alive;
+		};
 	} // namespace Private
 
 	// ============================================================================
@@ -831,6 +869,251 @@ namespace AsyncFlow
 	[[nodiscard]] inline FPlatformSecondsAwaiter PlatformSeconds(double InSeconds)
 	{
 		return FPlatformSecondsAwaiter{ InSeconds };
+	}
+
+	// ============================================================================
+	// MoveToSimilarThread — record current thread kind, move back later
+	// ============================================================================
+
+	/**
+	 * Captures the current named thread kind at construction. When co_awaited,
+	 * resumes the coroutine on a thread of the same kind.
+	 *
+	 * Usage:
+	 *   auto GoBack = MoveToSimilarThread(); // records "game thread"
+	 *   co_await MoveToTask();               // now on worker
+	 *   co_await GoBack;                     // back to game thread
+	 *
+	 * If already on the recorded thread kind, await_ready returns true (no-op).
+	 */
+	struct FMoveToSimilarThreadAwaiter
+	{
+		ENamedThreads::Type RecordedThread;
+		Private::FAwaiterAliveFlag AliveFlag;
+
+		bool await_ready() const
+		{
+			const ENamedThreads::Type CurrentThread =
+				FTaskGraphInterface::Get().GetCurrentThreadIfKnown();
+			return (CurrentThread & ENamedThreads::ThreadIndexMask) ==
+			       (RecordedThread & ENamedThreads::ThreadIndexMask);
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			TSharedPtr<bool> Alive = AliveFlag.Get();
+			AsyncTask(RecordedThread, [Handle, Alive]() {
+				if (*Alive)
+				{
+					Handle.resume();
+				}
+			});
+		}
+
+		void await_resume() const
+		{
+		}
+	};
+
+	/**
+	 * Record the current named thread kind and return an awaiter that moves back
+	 * to a thread of the same kind when co_awaited.
+	 */
+	[[nodiscard]] inline FMoveToSimilarThreadAwaiter MoveToSimilarThread()
+	{
+		return FMoveToSimilarThreadAwaiter{
+			FTaskGraphInterface::Get().GetCurrentThreadIfKnown()
+		};
+	}
+
+	// ============================================================================
+	// MoveToThreadPool — resume on a specific FQueuedThreadPool
+	// ============================================================================
+
+	/**
+	 * Resume the coroutine on a specific FQueuedThreadPool. Useful when you have
+	 * a dedicated thread pool (e.g., I/O pool, compute pool) separate from the
+	 * main task graph.
+	 *
+	 * @warning UObject access is FORBIDDEN on non-game threads.
+	 */
+	struct FMoveToThreadPoolAwaiter
+	{
+		FQueuedThreadPool* ThreadPool;
+		Private::FAwaiterAliveFlag AliveFlag;
+
+		bool await_ready() const
+		{
+			return false;
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			TSharedPtr<bool> Alive = AliveFlag.Get();
+			ThreadPool->AddQueuedWork(new Private::FCoroutineQueuedWork(Handle, MoveTemp(Alive)));
+		}
+
+		void await_resume() const
+		{
+		}
+	};
+
+	/**
+	 * Resume the coroutine on the specified thread pool.
+	 * @param Pool  The thread pool to resume on. Must outlive the co_await.
+	 */
+	[[nodiscard]] inline FMoveToThreadPoolAwaiter MoveToThreadPool(FQueuedThreadPool& Pool)
+	{
+		return FMoveToThreadPoolAwaiter{ &Pool };
+	}
+
+	// ============================================================================
+	// PlatformSecondsAnyThread — free-threaded delay, resume on worker
+	// ============================================================================
+
+	/**
+	 * Sleep for the specified duration on a worker thread, then resume on that
+	 * same worker thread (NOT the game thread). More efficient than
+	 * PlatformSeconds for background pipelines that don't need game thread access.
+	 *
+	 * @warning UObject access is FORBIDDEN after resume.
+	 *
+	 * @param InSeconds  Duration in wall-clock seconds. Values <= 0 resume immediately.
+	 */
+	struct FPlatformSecondsAnyThreadAwaiter
+	{
+		double Seconds;
+		Private::FAwaiterAliveFlag AliveFlag;
+
+		bool await_ready() const
+		{
+			return Seconds <= 0.0;
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			const double SleepDuration = Seconds;
+			TSharedPtr<bool> Alive = AliveFlag.Get();
+			Async(EAsyncExecution::ThreadPool, [Handle, SleepDuration, Alive]() {
+				FPlatformProcess::Sleep(static_cast<float>(SleepDuration));
+				if (*Alive)
+				{
+					Handle.resume();
+				}
+			});
+		}
+
+		void await_resume() const
+		{
+		}
+	};
+
+	/** Free-threaded delay. Sleeps and resumes on a worker thread. No world context required. */
+	[[nodiscard]] inline FPlatformSecondsAnyThreadAwaiter PlatformSecondsAnyThread(double InSeconds)
+	{
+		return FPlatformSecondsAnyThreadAwaiter{ InSeconds };
+	}
+
+	// ============================================================================
+	// UntilPlatformTime — wait until an absolute platform timestamp
+	// ============================================================================
+
+	/**
+	 * Wait until FPlatformTime::Seconds() reaches the target time.
+	 * Resumes on the game thread.
+	 *
+	 * If the target time has already passed, await_ready returns true (no-op).
+	 *
+	 * Usage:
+	 *   double Deadline = FPlatformTime::Seconds() + 5.0;
+	 *   co_await UntilPlatformTime(Deadline);
+	 */
+	struct FUntilPlatformTimeAwaiter
+	{
+		double TargetTime;
+		Private::FAwaiterAliveFlag AliveFlag;
+
+		bool await_ready() const
+		{
+			return FPlatformTime::Seconds() >= TargetTime;
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			const double Target = TargetTime;
+			TSharedPtr<bool> Alive = AliveFlag.Get();
+			Async(EAsyncExecution::ThreadPool, [Handle, Target, Alive]() {
+				const double Remaining = Target - FPlatformTime::Seconds();
+				if (Remaining > 0.0)
+				{
+					FPlatformProcess::Sleep(static_cast<float>(Remaining));
+				}
+				AsyncTask(ENamedThreads::GameThread, [Handle, Alive]() {
+					if (*Alive)
+					{
+						Handle.resume();
+					}
+				});
+			});
+		}
+
+		void await_resume() const
+		{
+		}
+	};
+
+	/** Wait until the specified platform time, then resume on the game thread. */
+	[[nodiscard]] inline FUntilPlatformTimeAwaiter UntilPlatformTime(double TargetTime)
+	{
+		return FUntilPlatformTimeAwaiter{ TargetTime };
+	}
+
+	// ============================================================================
+	// UntilPlatformTimeAnyThread — same but resumes on worker thread
+	// ============================================================================
+
+	/**
+	 * Wait until FPlatformTime::Seconds() reaches the target time.
+	 * Resumes on the worker thread (NOT the game thread).
+	 *
+	 * @warning UObject access is FORBIDDEN after resume.
+	 */
+	struct FUntilPlatformTimeAnyThreadAwaiter
+	{
+		double TargetTime;
+		Private::FAwaiterAliveFlag AliveFlag;
+
+		bool await_ready() const
+		{
+			return FPlatformTime::Seconds() >= TargetTime;
+		}
+
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			const double Target = TargetTime;
+			TSharedPtr<bool> Alive = AliveFlag.Get();
+			Async(EAsyncExecution::ThreadPool, [Handle, Target, Alive]() {
+				const double Remaining = Target - FPlatformTime::Seconds();
+				if (Remaining > 0.0)
+				{
+					FPlatformProcess::Sleep(static_cast<float>(Remaining));
+				}
+				if (*Alive)
+				{
+					Handle.resume();
+				}
+			});
+		}
+
+		void await_resume() const
+		{
+		}
+	};
+
+	/** Wait until the specified platform time, then resume on a worker thread. */
+	[[nodiscard]] inline FUntilPlatformTimeAnyThreadAwaiter UntilPlatformTimeAnyThread(double TargetTime)
+	{
+		return FUntilPlatformTimeAnyThreadAwaiter{ TargetTime };
 	}
 
 } // namespace AsyncFlow

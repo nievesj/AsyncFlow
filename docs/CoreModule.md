@@ -498,6 +498,24 @@ auto Budget = AsyncFlow::FTickTimeBudget::Milliseconds(this, 2.0);  // deprecate
 
 </details>
 
+### UntilTime / UntilRealTime / UntilUnpausedTime / UntilAudioTime
+
+Wait until a world clock reaches an absolute target time. If the target has already passed, the coroutine continues without suspending.
+
+```cpp
+co_await AsyncFlow::UntilTime(World->GetTimeSeconds() + 10.0);
+co_await AsyncFlow::UntilRealTime(World->GetRealTimeSeconds() + 5.0);
+co_await AsyncFlow::UntilUnpausedTime(World->GetUnpausedTimeSeconds() + 3.0);
+co_await AsyncFlow::UntilAudioTime(World->GetAudioTimeSeconds() + 2.0);
+```
+
+Each variant uses the corresponding world time domain. Optional world context parameter:
+
+```cpp
+co_await AsyncFlow::UntilTime(TargetTime, this);  // explicit context
+co_await AsyncFlow::UntilTime(TargetTime);         // inferred from coroutine
+```
+
 ---
 
 ## Flow Control
@@ -539,6 +557,27 @@ int32 Winner = co_await AsyncFlow::Race(TaskA, TaskB);
 // Loser tasks are cancelled automatically
 ```
 
+All three aggregates (`WhenAll`, `WhenAny`, `Race`) support **expedited cancellation** — if the parent coroutine is cancelled while waiting, all inner tasks are cancelled immediately via `CancelAwaiter()`.
+
+### Latent::WhenAll / Latent::WhenAny
+
+UObject-lifetime-tracked variants. If the context object is destroyed, all inner tasks are cancelled automatically via a contract check.
+
+```cpp
+co_await AsyncFlow::Latent::WhenAll(this, TaskA, TaskB);
+co_await AsyncFlow::Latent::WhenAny(this, TaskA, TaskB);
+```
+
+TArray overloads:
+
+```cpp
+TArray<AsyncFlow::TTask<void>*> Tasks = { &TaskA, &TaskB };
+co_await AsyncFlow::Latent::WhenAll(this, Tasks);
+int32 Winner = co_await AsyncFlow::Latent::WhenAny(this, Tasks);
+```
+
+Use these in latent coroutines (spawned from Blueprint) where actor/component lifetime matters.
+
 ---
 
 ## Delegates
@@ -571,6 +610,22 @@ co_await MyUnicastDelegate;
 ```
 
 The explicit `WaitForDelegate` wrapper is still available for readability or when you need to disambiguate.
+
+### WaitForDynamicDelegate
+
+Wait for a dynamic multicast delegate (`DECLARE_DYNAMIC_MULTICAST_DELEGATE`) to fire. Works with any zero-arg dynamic delegate type.
+
+```cpp
+co_await AsyncFlow::WaitForDynamicDelegate(MyActor->OnSomeEvent);
+```
+
+Dynamic delegates can also be awaited implicitly (same as multicast/unicast):
+
+```cpp
+co_await MyActor->OnSomeEvent;
+```
+
+> **Note:** Only the "fired" event is captured — delegate parameters are not forwarded. For typed dynamic delegates with parameters, use `AsyncFlow::Chain()` with manual binding.
 
 ### WaitForDelegate (Unicast)
 
@@ -625,6 +680,11 @@ AsyncFlow::TTask<void> MyLatentCoro(UObject* Ctx, FLatentActionInfo Info)
     co_await AsyncFlow::Delay(1.0f);
 }
 ```
+
+> **Latent fast-path (v3):** In latent mode, timing awaiters (Delay, RealDelay, Ticks, NextTick, WaitForCondition,
+> UntilTime, etc.) register their condition directly with the latent action instead of routing through the tick
+> subsystem. This eliminates one level of indirection and reduces per-frame overhead. The optimization is automatic —
+> no API change required.
 
 ### Manual (Legacy)
 

@@ -322,3 +322,45 @@ void UAsyncFlowTickSubsystem::CancelHandle(std::coroutine_handle<> Handle)
 	ConditionResumes.RemoveAll([Handle](const AsyncFlow::Private::FConditionResume& E) { return E.Handle == Handle; });
 	TickUpdates.RemoveAll([Handle](const AsyncFlow::Private::FTickUpdate& E) { return E.Handle == Handle; });
 }
+
+// --- Absolute-time scheduling ---
+
+void UAsyncFlowTickSubsystem::ScheduleUntilTime(std::coroutine_handle<> Handle, double TargetTime, TSharedPtr<bool> InAlive)
+{
+	AsyncFlow::Private::FDelayedResume Entry;
+	Entry.Handle = Handle;
+	Entry.ResumeAtTime = TargetTime;
+	Entry.TimeSource = AsyncFlow::Private::EDelayTimeSource::GameTime;
+	Entry.bAlive = MoveTemp(InAlive);
+	DelayedResumes.Add(MoveTemp(Entry));
+}
+
+void UAsyncFlowTickSubsystem::ScheduleUntilRealTime(std::coroutine_handle<> Handle, double TargetTime, TSharedPtr<bool> InAlive)
+{
+	AsyncFlow::Private::FDelayedResume Entry;
+	Entry.Handle = Handle;
+	Entry.ResumeAtTime = TargetTime;
+	Entry.TimeSource = AsyncFlow::Private::EDelayTimeSource::RealTime;
+	Entry.bAlive = MoveTemp(InAlive);
+	DelayedResumes.Add(MoveTemp(Entry));
+}
+
+void UAsyncFlowTickSubsystem::ScheduleUntilUnpausedTime(std::coroutine_handle<> Handle, double TargetTime, TSharedPtr<bool> InAlive)
+{
+	AsyncFlow::Private::FDelayedResume Entry;
+	Entry.Handle = Handle;
+	Entry.ResumeAtTime = TargetTime;
+	Entry.TimeSource = AsyncFlow::Private::EDelayTimeSource::UnpausedTime;
+	Entry.bAlive = MoveTemp(InAlive);
+	DelayedResumes.Add(MoveTemp(Entry));
+}
+
+void UAsyncFlowTickSubsystem::ScheduleUntilAudioTime(std::coroutine_handle<> Handle, double TargetTime, TSharedPtr<bool> InAlive)
+{
+	AsyncFlow::Private::FDelayedResume Entry;
+	Entry.Handle = Handle;
+	Entry.ResumeAtTime = TargetTime;
+	Entry.TimeSource = AsyncFlow::Private::EDelayTimeSource::AudioTime;
+	Entry.bAlive = MoveTemp(InAlive);
+	DelayedResumes.Add(MoveTemp(Entry));
+}

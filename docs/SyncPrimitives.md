@@ -15,6 +15,12 @@ releasing.
 > - **Cancelable:** All sync primitive awaiters support `CancelAwaiter()` for expedited cancellation when
     `TTask::Cancel()` is called.
 
+> **v3 changes:**
+> - **Caller-thread resumption:** Waiters now resume on the **thread that calls `Signal()` / `Release()`**, not forced to
+    the game thread. This eliminates the `AsyncTask(GameThread)` dispatch overhead for cross-thread signals. If you need
+    game-thread safety after resume, use `co_await MoveToGameThread()`.
+> - `CancelAwaiter()` also resumes on the cancelling thread.
+
 ---
 
 ## FAwaitableEvent
@@ -80,8 +86,8 @@ DataReadyEvent.Reset();
 `FAwaitableEvent` is fully thread-safe. `Signal()` and `Reset()` can be called from any thread. Internal state is
 protected by atomics and a critical section.
 
-If `Signal()` is called on the game thread, waiting coroutines resume **inline** — no `AsyncTask(GameThread)` dispatch
-is needed, eliminating a frame of latency.
+Waiting coroutines resume on the **thread that calls `Signal()`** — no dispatch overhead. If you need game-thread safety
+after resume, use `co_await MoveToGameThread()`.
 
 `await_suspend` returns `bool`. If `Signal()` fires in the window between `await_ready` and `await_suspend`, the
 coroutine is not suspended — it continues immediately rather than hanging indefinitely waiting for a signal that already
@@ -138,8 +144,8 @@ AsyncFlow::TTask<void> UMyComponent::WorkerLoop()
 
 ### Thread Safety
 
-`FAutoResetEvent` is fully thread-safe. `Signal()` can be called from any thread. If called on the game thread, the
-woken coroutine resumes inline.
+`FAutoResetEvent` is fully thread-safe. `Signal()` can be called from any thread. The woken coroutine resumes on the
+thread that calls `Signal()`. Use `co_await MoveToGameThread()` if you need game-thread access after resume.
 
 ### Cancelable
 
@@ -199,7 +205,8 @@ Semaphore.Release(5);
 `FAwaitableSemaphore` is fully thread-safe. `Release()` and `Release(int32)` can be called from any thread. All permit
 acquisition and waiter enqueuing is serialized through an internal critical section.
 
-If `Release()` is called on the game thread, the woken coroutine resumes **inline** (no dispatch overhead).
+The woken coroutine resumes on the **thread that calls `Release()`**. Use `co_await MoveToGameThread()` if you need
+game-thread access after resume.
 
 ### Cancelable
 

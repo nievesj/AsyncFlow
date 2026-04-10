@@ -72,6 +72,7 @@
 #include "Async/Future.h"
 #include "Delegates/Delegate.h"
 #include "Delegates/DelegateCombinations.h"
+#include "UObject/ScriptDelegates.h"
 #include "AsyncFlowLogging.h"
 #include "LatentActions.h"
 
@@ -222,6 +223,9 @@ namespace AsyncFlow
 		FAsyncFlowState* State = nullptr;
 	};
 
+	// Forward declaration for latent fast-path support
+	class FAsyncFlowLatentAction;
+
 	// ============================================================================
 	// Thread-local current-promise access (game-thread only)
 	// ============================================================================
@@ -250,6 +254,12 @@ namespace AsyncFlow
 		 * world context, then to GEngine->GetCurrentPlayWorld().
 		 */
 		ASYNCFLOW_API UWorld* ResolveWorld(UObject* OptionalContext = nullptr);
+
+		/** @return the FAsyncFlowLatentAction driving the current coroutine, or nullptr. */
+		ASYNCFLOW_API FAsyncFlowLatentAction* GetCurrentLatentAction();
+
+		/** Set the active latent action for latent fast-path detection. */
+		ASYNCFLOW_API void SetCurrentLatentAction(FAsyncFlowLatentAction* Action);
 
 	} // namespace Private
 
@@ -432,6 +442,15 @@ namespace AsyncFlow
 	struct TWaitForDelegateAwaiter;
 	template <typename... Args>
 	struct TWaitForUnicastDelegateAwaiter;
+
+	// Concept for dynamic multicast delegates (all inherit TMulticastScriptDelegate<>)
+	template <typename T>
+	concept DynamicMulticastDelegate = std::is_base_of_v<TMulticastScriptDelegate<>, std::remove_cvref_t<T>>;
+
+	// Forward declaration — actual template in AsyncFlowDelegateAwaiter.h
+	template <DynamicMulticastDelegate DelegateType>
+	struct TWaitForDynamicDelegateAwaiter;
+
 #if ASYNCFLOW_HAS_UE_TASKS
 	template <typename T>
 	struct FUETaskAwaiter;
@@ -547,6 +566,14 @@ namespace AsyncFlow
 			/** Pointer to the control block's CancelCurrentAwaiterFunc slot. */
 			TFunction<void()>* CancelSlot = nullptr;
 
+			/**
+			 * Type-erased termination callback — called in await_suspend when
+			 * ShouldCancel() fires. Marks the CB as completed, clears SelfRef
+			 * (triggering frame destruction once all external TTask refs drop),
+			 * and fires OnCompleted. Mirrors FSelfCancelAwaiter::await_suspend.
+			 */
+			TFunction<void()> TerminateFunc;
+
 			TContractCheckAwaiter(InnerAwaiter InInner, TSharedPtr<FAsyncFlowState> InState)
 				: Inner(Forward<InnerAwaiter>(InInner))
 				, State(MoveTemp(InState))
@@ -575,14 +602,34 @@ namespace AsyncFlow
 					{
 						State->Cancel();
 					}
-					return true; // Skip suspension
+					// Return false to force await_suspend, where we can properly
+					// terminate the coroutine (leaving it permanently suspended).
+					return false;
 				}
 				return Inner.await_ready();
 			}
 
 			template <typename HandleType>
-			auto await_suspend(HandleType Handle)
+			void await_suspend(HandleType Handle)
 			{
+				// Terminate the coroutine if cancelled: fire the completion
+				// callback and leave this frame permanently suspended.
+				// The coroutine will not execute any code after this co_await.
+				if (State && State->IsCancelled())
+				{
+					// Clear cancel slot before TerminateFunc potentially destroys CB.
+					if (CancelSlot)
+					{
+						*CancelSlot = nullptr;
+						CancelSlot = nullptr;
+					}
+					if (TerminateFunc)
+					{
+						TerminateFunc(); // May destroy the coroutine frame
+					}
+					return; // Do NOT access 'this' after TerminateFunc
+				}
+
 				// Register cancel function if inner awaiter supports expedited cancellation
 				if constexpr (CancelableAwaiter<std::remove_reference_t<InnerAwaiter>>)
 				{
@@ -597,11 +644,11 @@ namespace AsyncFlow
 				// This prevents Signal()/Release() from touching a destroyed coroutine frame.
 				if constexpr (requires { Inner.await_suspend_alive(Handle, TWeakPtr<bool>{}); })
 				{
-					return Inner.await_suspend_alive(Handle, TWeakPtr<bool>(Alive));
+					Inner.await_suspend_alive(Handle, TWeakPtr<bool>(Alive));
 				}
 				else
 				{
-					return Inner.await_suspend(Handle);
+					Inner.await_suspend(Handle);
 				}
 			}
 
@@ -741,19 +788,13 @@ namespace AsyncFlow
 				Private::TContractCheckAwaiter<decltype(InnerAwaiter)> Wrapper{
 					std::move(InnerAwaiter), FlowState
 				};
-				if (CB)
-				{
-					Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
-				}
+				SetupContractAwaiter(Wrapper);
 				return Wrapper;
 			}
 			else
 			{
 				Private::TContractCheckAwaiter<AwaiterType> Wrapper{ std::forward<AwaiterType>(Awaiter), FlowState };
-				if (CB)
-				{
-					Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
-				}
+				SetupContractAwaiter(Wrapper);
 				return Wrapper;
 			}
 		}
@@ -768,10 +809,7 @@ namespace AsyncFlow
 		Private::TContractCheckAwaiter<FFinishNowIfCanceled> await_transform(FFinishNowIfCanceled)
 		{
 			Private::TContractCheckAwaiter<FFinishNowIfCanceled> Wrapper{ FFinishNowIfCanceled{}, FlowState };
-			if (CB)
-			{
-				Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
-			}
+			SetupContractAwaiter(Wrapper);
 			return Wrapper;
 		}
 
@@ -797,10 +835,7 @@ namespace AsyncFlow
 			Private::TContractCheckAwaiter<FFutureAwaiter<U>> Wrapper{
 				FFutureAwaiter<U>(MoveTemp(Future)), FlowState
 			};
-			if (CB)
-			{
-				Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
-			}
+			SetupContractAwaiter(Wrapper);
 			return Wrapper;
 		}
 
@@ -811,10 +846,7 @@ namespace AsyncFlow
 			Private::TContractCheckAwaiter<TWaitForDelegateAwaiter<TMulticastDelegate<void(Args...)>>> Wrapper{
 				TWaitForDelegateAwaiter<TMulticastDelegate<void(Args...)>>(Delegate), FlowState
 			};
-			if (CB)
-			{
-				Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
-			}
+			SetupContractAwaiter(Wrapper);
 			return Wrapper;
 		}
 
@@ -825,10 +857,18 @@ namespace AsyncFlow
 			Private::TContractCheckAwaiter<TWaitForUnicastDelegateAwaiter<Args...>> Wrapper{
 				TWaitForUnicastDelegateAwaiter<Args...>(Delegate), FlowState
 			};
-			if (CB)
-			{
-				Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
-			}
+			SetupContractAwaiter(Wrapper);
+			return Wrapper;
+		}
+
+		// Dynamic multicast delegates — co_await any DECLARE_DYNAMIC_MULTICAST_DELEGATE type
+		template <DynamicMulticastDelegate DT>
+		Private::TContractCheckAwaiter<TWaitForDynamicDelegateAwaiter<DT>> await_transform(DT& Delegate)
+		{
+			Private::TContractCheckAwaiter<TWaitForDynamicDelegateAwaiter<DT>> Wrapper{
+				TWaitForDynamicDelegateAwaiter<DT>(Delegate), FlowState
+			};
+			SetupContractAwaiter(Wrapper);
 			return Wrapper;
 		}
 
@@ -840,15 +880,36 @@ namespace AsyncFlow
 			Private::TContractCheckAwaiter<FUETaskAwaiter<U>> Wrapper{
 				FUETaskAwaiter<U>(MoveTemp(Task)), FlowState
 			};
-			if (CB)
-			{
-				Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
-			}
+			SetupContractAwaiter(Wrapper);
 			return Wrapper;
 		}
 #endif
 
 	private:
+		/**
+		 * Wires up both CancelSlot and TerminateFunc on a TContractCheckAwaiter
+		 * so that CO_CONTRACT violations permanently stop the coroutine.
+		 * Called from every await_transform overload that produces a wrapper.
+		 */
+		void SetupContractAwaiter(auto& Wrapper)
+		{
+			if (CB)
+			{
+				Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
+				auto* CBPtr = CB;
+				Wrapper.TerminateFunc = [CBPtr]() {
+					CBPtr->FlowState->Cancel();
+					CBPtr->bCompleted.store(true, std::memory_order_release);
+					auto Callback = MoveTemp(CBPtr->OnCompleted);
+					CBPtr->SelfRef.Reset(); // Destroys frame when no external TTask refs remain
+					if (Callback)
+					{
+						Callback();
+					}
+				};
+			}
+		}
+
 		void InitLatentMode(UObject* WorldContext, FLatentActionInfo LatentInfo)
 		{
 			bLatentMode = true;
@@ -874,10 +935,6 @@ namespace AsyncFlow
 		// get_return_object() needs access to transfer latent data to the control block
 		friend TTask<T>;
 	};
-
-	// ============================================================================
-	// TTaskPromise<void> — specialization for void return type
-	// ============================================================================
 
 	template <>
 	struct TTaskPromise<void>
@@ -959,19 +1016,13 @@ namespace AsyncFlow
 				Private::TContractCheckAwaiter<decltype(InnerAwaiter)> Wrapper{
 					std::move(InnerAwaiter), FlowState
 				};
-				if (CB)
-				{
-					Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
-				}
+				SetupContractAwaiter(Wrapper);
 				return Wrapper;
 			}
 			else
 			{
 				Private::TContractCheckAwaiter<AwaiterType> Wrapper{ std::forward<AwaiterType>(Awaiter), FlowState };
-				if (CB)
-				{
-					Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
-				}
+				SetupContractAwaiter(Wrapper);
 				return Wrapper;
 			}
 		}
@@ -986,10 +1037,7 @@ namespace AsyncFlow
 		Private::TContractCheckAwaiter<FFinishNowIfCanceled> await_transform(FFinishNowIfCanceled)
 		{
 			Private::TContractCheckAwaiter<FFinishNowIfCanceled> Wrapper{ FFinishNowIfCanceled{}, FlowState };
-			if (CB)
-			{
-				Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
-			}
+			SetupContractAwaiter(Wrapper);
 			return Wrapper;
 		}
 
@@ -1007,10 +1055,7 @@ namespace AsyncFlow
 			Private::TContractCheckAwaiter<FFutureAwaiter<U>> Wrapper{
 				FFutureAwaiter<U>(MoveTemp(Future)), FlowState
 			};
-			if (CB)
-			{
-				Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
-			}
+			SetupContractAwaiter(Wrapper);
 			return Wrapper;
 		}
 
@@ -1020,10 +1065,7 @@ namespace AsyncFlow
 			Private::TContractCheckAwaiter<TWaitForDelegateAwaiter<TMulticastDelegate<void(Args...)>>> Wrapper{
 				TWaitForDelegateAwaiter<TMulticastDelegate<void(Args...)>>(Delegate), FlowState
 			};
-			if (CB)
-			{
-				Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
-			}
+			SetupContractAwaiter(Wrapper);
 			return Wrapper;
 		}
 
@@ -1033,10 +1075,18 @@ namespace AsyncFlow
 			Private::TContractCheckAwaiter<TWaitForUnicastDelegateAwaiter<Args...>> Wrapper{
 				TWaitForUnicastDelegateAwaiter<Args...>(Delegate), FlowState
 			};
-			if (CB)
-			{
-				Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
-			}
+			SetupContractAwaiter(Wrapper);
+			return Wrapper;
+		}
+
+		// Dynamic multicast delegates — co_await any DECLARE_DYNAMIC_MULTICAST_DELEGATE type
+		template <DynamicMulticastDelegate DT>
+		Private::TContractCheckAwaiter<TWaitForDynamicDelegateAwaiter<DT>> await_transform(DT& Delegate)
+		{
+			Private::TContractCheckAwaiter<TWaitForDynamicDelegateAwaiter<DT>> Wrapper{
+				TWaitForDynamicDelegateAwaiter<DT>(Delegate), FlowState
+			};
+			SetupContractAwaiter(Wrapper);
 			return Wrapper;
 		}
 
@@ -1047,15 +1097,32 @@ namespace AsyncFlow
 			Private::TContractCheckAwaiter<FUETaskAwaiter<U>> Wrapper{
 				FUETaskAwaiter<U>(MoveTemp(Task)), FlowState
 			};
-			if (CB)
-			{
-				Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
-			}
+			SetupContractAwaiter(Wrapper);
 			return Wrapper;
 		}
 #endif
 
 	private:
+		/** See TTaskPromise<T>::SetupContractAwaiter. */
+		void SetupContractAwaiter(auto& Wrapper)
+		{
+			if (CB)
+			{
+				Wrapper.CancelSlot = &CB->CancelCurrentAwaiterFunc;
+				auto* CBPtr = CB;
+				Wrapper.TerminateFunc = [CBPtr]() {
+					CBPtr->FlowState->Cancel();
+					CBPtr->bCompleted.store(true, std::memory_order_release);
+					auto Callback = MoveTemp(CBPtr->OnCompleted);
+					CBPtr->SelfRef.Reset();
+					if (Callback)
+					{
+						Callback();
+					}
+				};
+			}
+		}
+
 		void InitLatentMode(UObject* WorldContext, FLatentActionInfo LatentInfo)
 		{
 			bLatentMode = true;

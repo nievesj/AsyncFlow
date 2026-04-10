@@ -61,6 +61,14 @@ namespace AsyncFlow
 	class FAsyncFlowLatentAction : public FPendingLatentAction
 	{
 	public:
+		/** Condition registered by a timing awaiter for direct resume in UpdateOperation. */
+		struct FLatentCondition
+		{
+			TFunction<bool()> Predicate;
+			std::coroutine_handle<> Handle;
+			TSharedPtr<bool> AliveFlag;
+		};
+
 		/** Legacy constructor: takes ownership of a TTask<void> and starts it. */
 		FAsyncFlowLatentAction(const FLatentActionInfo& InLatentInfo, TTask<void>&& InTask)
 			: Task(MoveTemp(InTask))
@@ -83,8 +91,67 @@ namespace AsyncFlow
 		{
 		}
 
+		/**
+		 * Register a condition for the latent fast-path. Called by timing awaiters
+		 * when they detect they're running inside a latent coroutine.
+		 * The condition will be polled each frame in UpdateOperation.
+		 */
+		void SetCondition(TFunction<bool()> Predicate, std::coroutine_handle<> Handle, TSharedPtr<bool> AliveFlag)
+		{
+			PendingCondition.Emplace(FLatentCondition{ MoveTemp(Predicate), Handle, MoveTemp(AliveFlag) });
+		}
+
+		void ClearCondition()
+		{
+			PendingCondition.Reset();
+		}
+
 		virtual void UpdateOperation(FLatentResponse& Response) override
 		{
+			// Latent fast-path: check if a timing awaiter registered a condition
+			if (PendingCondition.IsSet())
+			{
+				auto& Cond = PendingCondition.GetValue();
+
+				// If the awaiter is dead (coroutine destroyed), clear the stale condition
+				if (!Cond.AliveFlag || !*Cond.AliveFlag)
+				{
+					PendingCondition.Reset();
+					// Fall through to bDone check
+				}
+				else if (Cond.Predicate())
+				{
+					auto LocalHandle = Cond.Handle;
+					auto LocalAlive = Cond.AliveFlag;
+					PendingCondition.Reset();
+
+					// Set thread-locals for the resumed coroutine
+					if (ControlBlock)
+					{
+						Private::SetCurrentFlowState(ControlBlock->FlowState.Get());
+						Private::SetCurrentLatentAction(this);
+						if (ControlBlock->LatentWorldContext.IsValid())
+						{
+							Private::SetCurrentWorldContext(ControlBlock->LatentWorldContext.Get());
+						}
+					}
+
+					if (*LocalAlive && LocalHandle && !LocalHandle.done())
+					{
+						LocalHandle.resume();
+					}
+
+					Private::SetCurrentWorldContext(nullptr);
+					Private::SetCurrentLatentAction(nullptr);
+					Private::SetCurrentFlowState(nullptr);
+					return;
+				}
+				else
+				{
+					return; // Condition not yet met, wait another frame
+				}
+			}
+
 			bool bDone;
 			if (ControlBlock)
 			{
@@ -141,6 +208,7 @@ namespace AsyncFlow
 		int32 OutputLink = 0;
 		TWeakObjectPtr<UObject> CallbackTarget;
 		bool bTaskCompleted = false;
+		TOptional<FLatentCondition> PendingCondition;
 	};
 
 	/**

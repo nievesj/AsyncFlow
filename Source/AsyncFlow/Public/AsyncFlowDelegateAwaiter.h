@@ -29,6 +29,7 @@
 #pragma once
 
 #include "AsyncFlowTask.h"
+#include "AsyncFlowDynamicDelegateBridge.h"
 #include "Delegates/Delegate.h"
 #include "Delegates/DelegateCombinations.h"
 #include "Templates/Tuple.h"
@@ -464,6 +465,115 @@ namespace AsyncFlow
 	[[nodiscard]] inline TChainAwaiter<void> Chain(TFunction<void(TFunction<void()>)> SetupFunc)
 	{
 		return TChainAwaiter<void>{ MoveTemp(SetupFunc) };
+	}
+
+	// ============================================================================
+	// WaitForDynamicDelegate — dynamic multicast delegate awaiting
+	// ============================================================================
+
+	/**
+	 * Awaiter for zero-arg dynamic multicast delegates.
+	 *
+	 * Works with any DECLARE_DYNAMIC_MULTICAST_DELEGATE(FMyDelegate) type.
+	 * Uses the DynamicMulticastDelegate concept defined in AsyncFlowTask.h.
+	 * Creates a transient UAsyncFlowDelegateBridge UObject, binds its UFUNCTION
+	 * to the delegate via FScriptDelegate, and resumes the coroutine when the
+	 * delegate broadcasts. One-shot: unbinds after the first broadcast.
+	 *
+	 * For typed dynamic delegates (one or more parameters), use AsyncFlow::Chain()
+	 * with manual delegate binding instead.
+	 *
+	 * @tparam DelegateType  Any type satisfying DynamicMulticastDelegate concept.
+	 */
+	template <DynamicMulticastDelegate DelegateType>
+	struct TWaitForDynamicDelegateAwaiter
+	{
+		DelegateType& Delegate;
+		TSharedPtr<bool> AliveFlag = MakeShared<bool>(true);
+		std::coroutine_handle<> Continuation;
+		TObjectPtr<UAsyncFlowDelegateBridge> Bridge;
+
+		explicit TWaitForDynamicDelegateAwaiter(DelegateType& InDelegate)
+			: Delegate(InDelegate)
+		{
+		}
+
+		~TWaitForDynamicDelegateAwaiter()
+		{
+			*AliveFlag = false;
+			Cleanup();
+		}
+
+		TWaitForDynamicDelegateAwaiter(TWaitForDynamicDelegateAwaiter&&) noexcept = default;
+		TWaitForDynamicDelegateAwaiter& operator=(TWaitForDynamicDelegateAwaiter&&) = delete;
+		TWaitForDynamicDelegateAwaiter(const TWaitForDynamicDelegateAwaiter&) = delete;
+		TWaitForDynamicDelegateAwaiter& operator=(const TWaitForDynamicDelegateAwaiter&) = delete;
+
+		bool await_ready() const { return false; }
+
+		void await_suspend(std::coroutine_handle<> Handle)
+		{
+			Continuation = Handle;
+
+			Bridge = NewObject<UAsyncFlowDelegateBridge>();
+			Bridge->AddToRoot();
+			Bridge->Continuation = Handle;
+			Bridge->AliveFlag = AliveFlag;
+
+			FScriptDelegate Binding;
+			Binding.BindUFunction(Bridge.Get(), FName(TEXT("OnSimpleDelegateFired")));
+			Delegate.Add(Binding);
+		}
+
+		void await_resume()
+		{
+			Cleanup();
+		}
+
+		void CancelAwaiter()
+		{
+			Cleanup();
+			if (Continuation && !Continuation.done())
+			{
+				auto H = Continuation;
+				Continuation = nullptr;
+				H.resume();
+			}
+		}
+
+	private:
+		void Cleanup()
+		{
+			if (Bridge)
+			{
+				FScriptDelegate Binding;
+				Binding.BindUFunction(Bridge.Get(), FName(TEXT("OnSimpleDelegateFired")));
+				Delegate.Remove(Binding);
+
+				Bridge->RemoveFromRoot();
+				Bridge->Continuation = nullptr;
+				Bridge = nullptr;
+			}
+		}
+	};
+
+	/**
+	 * Wait for a dynamic multicast delegate to fire once (zero-arg).
+	 *
+	 * Works with any DECLARE_DYNAMIC_MULTICAST_DELEGATE type.
+	 * For delegates with parameters, the parameters are ignored — only the
+	 * "fired" event is captured. Use AsyncFlow::Chain() if you need args.
+	 *
+	 * @param Delegate  Reference to the dynamic multicast delegate.
+	 * @return          An awaiter — co_await yields void.
+	 *
+	 * Example:
+	 *   co_await AsyncFlow::WaitForDynamicDelegate(MyActor->OnSomeEvent);
+	 */
+	template <DynamicMulticastDelegate DelegateType>
+	[[nodiscard]] TWaitForDynamicDelegateAwaiter<DelegateType> WaitForDynamicDelegate(DelegateType& Delegate)
+	{
+		return TWaitForDynamicDelegateAwaiter<DelegateType>(Delegate);
 	}
 
 } // namespace AsyncFlow

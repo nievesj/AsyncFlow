@@ -27,11 +27,11 @@
 // without blocking any threads.
 //
 // Thread-safe: Signal(), Reset(), Release(), and all co_await operations can be
-// called from any thread. Waiters resume on the game thread — inline when the
-// signal originates on the game thread, otherwise dispatched via AsyncTask.
+// called from any thread. Waiters resume on the caller's thread — the thread
+// that calls Signal()/Release(). Use co_await MoveToGameThread() after resume
+// if game-thread safety is needed.
 #pragma once
 
-#include "Async/Async.h"
 #include "AsyncFlowTask.h"
 #include "Containers/Array.h"
 #include "HAL/CriticalSection.h"
@@ -56,8 +56,7 @@ namespace AsyncFlow
 	 * until Reset() is called.
 	 *
 	 * All methods are thread-safe. Signal(), Reset(), and co_await may be called
-	 * from any thread. Waiters resume on the game thread (inline when signaled
-	 * from the game thread, otherwise dispatched via AsyncTask).
+	 * from any thread. Waiters resume on the thread that calls Signal().
 	 *
 	 * The co_await FAwaiter satisfies the CancelableAwaiter concept, enabling
 	 * expedited cancellation when used inside a TTask.
@@ -90,63 +89,36 @@ namespace AsyncFlow
 		}
 
 		/**
-		 * Signal the event. All currently suspended coroutines resume on the
-		 * game thread. If called from the game thread, waiters resume inline
-		 * (no dispatch overhead). Subsequent co_awaits skip suspension until
+		 * Signal the event. All currently suspended coroutines resume inline
+		 * on the calling thread. Subsequent co_awaits skip suspension until
 		 * Reset(). Thread-safe — may be called from any thread.
+		 *
+		 * @warning If called from a non-game thread, resumed coroutines run
+		 *          on that thread. UObject access requires co_await MoveToGameThread().
 		 */
 		void Signal()
 		{
 			TArray<FWaiterEntry> LocalWaiters;
 			{
 				FScopeLock Lock(&CriticalSection);
-				bSignaled.store(true, std::memory_order_relaxed);
+				bSignaled.store(true, std::memory_order_release);
 				LocalWaiters = MoveTemp(Waiters);
 			}
 
-			const bool bOnGameThread = IsInGameThread();
-
 			for (const FWaiterEntry& Entry : LocalWaiters)
 			{
-				const std::coroutine_handle<> Handle = Entry.Handle;
-
 				if (Entry.bHasAliveFlag)
 				{
-					const TWeakPtr<bool> WeakAlive = Entry.AliveFlag;
-					if (bOnGameThread)
+					if (const TSharedPtr<bool> Alive = Entry.AliveFlag.Pin(); Alive && *Alive)
 					{
-						if (const TSharedPtr<bool> Alive = WeakAlive.Pin(); Alive && *Alive)
-						{
-							Handle.resume();
-						}
-					}
-					else
-					{
-						AsyncTask(ENamedThreads::GameThread, [Handle, WeakAlive]() {
-							if (const TSharedPtr<bool> Alive = WeakAlive.Pin(); Alive && *Alive)
-							{
-								Handle.resume();
-							}
-						});
+						Entry.Handle.resume();
 					}
 				}
 				else
 				{
-					if (bOnGameThread)
+					if (Entry.Handle && !Entry.Handle.done())
 					{
-						if (Handle && !Handle.done())
-						{
-							Handle.resume();
-						}
-					}
-					else
-					{
-						AsyncTask(ENamedThreads::GameThread, [Handle]() {
-							if (Handle && !Handle.done())
-							{
-								Handle.resume();
-							}
-						});
+						Entry.Handle.resume();
 					}
 				}
 			}
@@ -251,15 +223,7 @@ namespace AsyncFlow
 						}
 					}
 				}
-				if (IsInGameThread())
-				{
-					Handle.resume();
-				}
-				else
-				{
-					auto H = Handle;
-					AsyncTask(ENamedThreads::GameThread, [H]() { H.resume(); });
-				}
+				Handle.resume();
 			}
 		};
 
@@ -292,8 +256,7 @@ namespace AsyncFlow
 	 * queued, the next co_await passes through immediately and auto-resets.
 	 *
 	 * All methods are thread-safe. Signal(), Reset(), and co_await may be called
-	 * from any thread. The woken waiter resumes on the game thread (inline when
-	 * signaled from the game thread, otherwise dispatched via AsyncTask).
+	 * from any thread. The woken waiter resumes on the thread that calls Signal().
 	 *
 	 * The co_await FAwaiter satisfies the CancelableAwaiter concept, enabling
 	 * expedited cancellation when used inside a TTask.
@@ -368,52 +331,22 @@ namespace AsyncFlow
 
 			if (bFoundWaiter)
 			{
-				const bool bOnGameThread = IsInGameThread();
-
 				if (bWaiterIsProtected)
 				{
-					if (bOnGameThread)
+					if (const TSharedPtr<bool> Alive = LiveAlive.Pin(); Alive && *Alive)
 					{
-						if (const TSharedPtr<bool> Alive = LiveAlive.Pin(); Alive && *Alive)
-						{
-							HandleToResume.resume();
-						}
-						else
-						{
-							Signal(); // Waiter died after dequeue — retry next
-						}
+						HandleToResume.resume();
 					}
 					else
 					{
-						AsyncTask(ENamedThreads::GameThread, [HandleToResume, LiveAlive, this]() {
-							if (const TSharedPtr<bool> Alive = LiveAlive.Pin(); Alive && *Alive)
-							{
-								HandleToResume.resume();
-							}
-							else
-							{
-								this->Signal();
-							}
-						});
+						Signal(); // Waiter died after dequeue — retry next
 					}
 				}
 				else
 				{
-					if (bOnGameThread)
+					if (HandleToResume && !HandleToResume.done())
 					{
-						if (HandleToResume && !HandleToResume.done())
-						{
-							HandleToResume.resume();
-						}
-					}
-					else
-					{
-						AsyncTask(ENamedThreads::GameThread, [HandleToResume]() {
-							if (HandleToResume && !HandleToResume.done())
-							{
-								HandleToResume.resume();
-							}
-						});
+						HandleToResume.resume();
 					}
 				}
 			}
@@ -507,15 +440,7 @@ namespace AsyncFlow
 						}
 					}
 				}
-				if (IsInGameThread())
-				{
-					Handle.resume();
-				}
-				else
-				{
-					auto H = Handle;
-					AsyncTask(ENamedThreads::GameThread, [H]() { H.resume(); });
-				}
+				Handle.resume();
 			}
 		};
 
@@ -553,8 +478,7 @@ namespace AsyncFlow
 	 * waiting coroutines.
 	 *
 	 * All methods are thread-safe. Release(), co_await, and GetAvailable() may
-	 * be called from any thread. Waiters resume on the game thread (inline when
-	 * released from the game thread, otherwise dispatched via AsyncTask).
+	 * be called from any thread. Waiters resume on the thread that calls Release().
 	 *
 	 * The co_await FAwaiter satisfies the CancelableAwaiter concept, enabling
 	 * expedited cancellation when used inside a TTask.
@@ -605,16 +529,13 @@ namespace AsyncFlow
 		 * skipped automatically. If no live waiters remain for a permit, the
 		 * permit count is decremented.
 		 *
-		 * If called from the game thread, waiters resume inline (no dispatch
-		 * overhead). Otherwise dispatched via AsyncTask.
+		 * Waiters resume inline on the calling thread. If you need game-thread
+		 * safety after resume, use co_await MoveToGameThread() in the waiter.
 		 *
 		 * @param Count  Number of permits to release. Must be >= 1.
 		 *
 		 * @warning Calling Release() more times than permits were acquired triggers
 		 *          an ensure.
-		 * @warning The semaphore must outlive any AsyncTask callbacks posted by
-		 *          Release(). Destroying the semaphore while callbacks are in flight
-		 *          is a programming error.
 		 */
 		void Release(int32 Count = 1)
 		{
@@ -671,58 +592,25 @@ namespace AsyncFlow
 				}
 			}
 
-			const bool bOnGameThread = IsInGameThread();
-
 			for (const FResumeInfo& Info : ToResume)
 			{
 				if (Info.bIsProtected)
 				{
-					if (bOnGameThread)
+					if (const TSharedPtr<bool> Alive = Info.AliveFlag.Pin(); Alive && *Alive)
 					{
-						if (const TSharedPtr<bool> Alive = Info.AliveFlag.Pin(); Alive && *Alive)
-						{
-							Info.Handle.resume();
-						}
-						else
-						{
-							// Waiter died after we "gave" it the permit — bounce back.
-							Release();
-						}
+						Info.Handle.resume();
 					}
 					else
 					{
-						auto H = Info.Handle;
-						auto WeakAlive = Info.AliveFlag;
-						AsyncTask(ENamedThreads::GameThread, [H, WeakAlive, this]() {
-							if (const TSharedPtr<bool> Alive = WeakAlive.Pin(); Alive && *Alive)
-							{
-								H.resume();
-							}
-							else
-							{
-								this->Release();
-							}
-						});
+						// Waiter died after we "gave" it the permit — bounce back.
+						Release();
 					}
 				}
 				else
 				{
-					if (bOnGameThread)
+					if (Info.Handle && !Info.Handle.done())
 					{
-						if (Info.Handle && !Info.Handle.done())
-						{
-							Info.Handle.resume();
-						}
-					}
-					else
-					{
-						auto H = Info.Handle;
-						AsyncTask(ENamedThreads::GameThread, [H]() {
-							if (H && !H.done())
-							{
-								H.resume();
-							}
-						});
+						Info.Handle.resume();
 					}
 				}
 			}
@@ -819,15 +707,7 @@ namespace AsyncFlow
 						}
 					}
 				}
-				if (IsInGameThread())
-				{
-					Handle.resume();
-				}
-				else
-				{
-					auto H = Handle;
-					AsyncTask(ENamedThreads::GameThread, [H]() { H.resume(); });
-				}
+				Handle.resume();
 			}
 		};
 
@@ -986,15 +866,7 @@ namespace AsyncFlow
 					}
 				}
 			}
-			if (IsInGameThread())
-			{
-				Handle.resume();
-			}
-			else
-			{
-				auto H = Handle;
-				AsyncTask(ENamedThreads::GameThread, [H]() { H.resume(); });
-			}
+			Handle.resume();
 		}
 	};
 
