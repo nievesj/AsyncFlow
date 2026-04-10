@@ -326,6 +326,19 @@ namespace AsyncFlow
 		{ a.CancelAwaiter() } -> std::same_as<void>;
 	};
 
+	/**
+	 * An awaiter satisfies CleanupableAwaiter if it exposes a CleanupAwaiter()
+	 * method. CleanupAwaiter() must remove the awaiter from whatever queue it is
+	 * in without resuming the coroutine handle. Used by TContractCheckAwaiter for
+	 * resource-acquisition awaiters (FAwaitableEvent, FAwaitableSemaphore) so that
+	 * cancellation permanently terminates the frame instead of resuming it with a
+	 * "successful" acquire.
+	 */
+	template <typename T>
+	concept CleanupableAwaiter = requires(T& a) {
+		{ a.CleanupAwaiter() } -> std::same_as<void>;
+	};
+
 	// ============================================================================
 	// Forward declarations
 	// ============================================================================
@@ -610,12 +623,12 @@ namespace AsyncFlow
 			}
 
 			template <typename HandleType>
-			void await_suspend(HandleType Handle)
+			bool await_suspend(HandleType Handle)
 			{
 				// Terminate the coroutine if cancelled: fire the completion
 				// callback and leave this frame permanently suspended.
 				// The coroutine will not execute any code after this co_await.
-				if (State && State->IsCancelled())
+				if (State && State->ShouldCancel())
 				{
 					// Clear cancel slot before TerminateFunc potentially destroys CB.
 					if (CancelSlot)
@@ -627,11 +640,28 @@ namespace AsyncFlow
 					{
 						TerminateFunc(); // May destroy the coroutine frame
 					}
-					return; // Do NOT access 'this' after TerminateFunc
+					return true; // Stay suspended — do NOT access 'this' after TerminateFunc
 				}
 
-				// Register cancel function if inner awaiter supports expedited cancellation
-				if constexpr (CancelableAwaiter<std::remove_reference_t<InnerAwaiter>>)
+				// Register cancel function.
+				// CleanupableAwaiter (resource awaiters like semaphore/event): remove from queue
+				// without resuming, then terminate the frame via TerminateFunc. This prevents
+				// code after co_await from running as if the resource was successfully acquired.
+				// CancelableAwaiter (timing awaiters): resume the coroutine, let the next co_await
+				// detect cancellation.
+				if constexpr (CleanupableAwaiter<std::remove_reference_t<InnerAwaiter>>)
+				{
+					if (CancelSlot && TerminateFunc)
+					{
+						auto* InnerPtr = &Inner;
+						auto TermFn = TerminateFunc;
+						*CancelSlot = [InnerPtr, TermFn]() mutable {
+							InnerPtr->CleanupAwaiter();
+							TermFn();
+						};
+					}
+				}
+				else if constexpr (CancelableAwaiter<std::remove_reference_t<InnerAwaiter>>)
 				{
 					if (CancelSlot)
 					{
@@ -642,13 +672,16 @@ namespace AsyncFlow
 
 				// Prefer the alive-flag-aware overload when the inner awaitable supports it.
 				// This prevents Signal()/Release() from touching a destroyed coroutine frame.
+				// Propagate the bool return: false = immediate resume (resource acquired inline),
+				// true = coroutine stays suspended until inner schedules a resume.
 				if constexpr (requires { Inner.await_suspend_alive(Handle, TWeakPtr<bool>{}); })
 				{
-					Inner.await_suspend_alive(Handle, TWeakPtr<bool>(Alive));
+					return Inner.await_suspend_alive(Handle, TWeakPtr<bool>(Alive));
 				}
 				else
 				{
 					Inner.await_suspend(Handle);
+					return true; // void inner always suspends; it is responsible for scheduling resume
 				}
 			}
 

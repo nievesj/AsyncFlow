@@ -225,6 +225,25 @@ namespace AsyncFlow
 				}
 				Handle.resume();
 			}
+
+			/**
+			 * Remove this awaiter from the event's waiter queue WITHOUT resuming the
+			 * coroutine. Used by TContractCheckAwaiter's cancel path so that the frame
+			 * can be permanently terminated via TerminateFunc without executing code
+			 * after co_await as if the event was successfully signaled. Thread-safe.
+			 */
+			void CleanupAwaiter()
+			{
+				FScopeLock Lock(&Event->CriticalSection);
+				for (int32 i = 0; i < Event->Waiters.Num(); ++i)
+				{
+					if (Event->Waiters[i].Handle == Handle)
+					{
+						Event->Waiters.RemoveAt(i);
+						break;
+					}
+				}
+			}
 		};
 
 		/** Returns a per-co_await FAwaiter with CancelableAwaiter support. */
@@ -441,6 +460,25 @@ namespace AsyncFlow
 					}
 				}
 				Handle.resume();
+			}
+
+			/**
+			 * Remove this awaiter from the auto-reset event's queue WITHOUT resuming
+			 * the coroutine. Used by TContractCheckAwaiter's cancel path so the frame
+			 * is permanently terminated without executing code after co_await as if
+			 * the event was successfully signaled. Thread-safe.
+			 */
+			void CleanupAwaiter()
+			{
+				FScopeLock Lock(&Event->CriticalSection);
+				for (int32 i = 0; i < Event->WaitingHandles.Num(); ++i)
+				{
+					if (Event->WaitingHandles[i].Handle == Handle)
+					{
+						Event->WaitingHandles.RemoveAt(i);
+						break;
+					}
+				}
 			}
 		};
 
@@ -708,6 +746,25 @@ namespace AsyncFlow
 					}
 				}
 				Handle.resume();
+			}
+
+			/**
+			 * Remove this awaiter from the semaphore's waiter queue WITHOUT resuming
+			 * the coroutine. Used by TContractCheckAwaiter's cancel path so the frame
+			 * is permanently terminated without executing code after co_await as if
+			 * the permit was successfully acquired. Thread-safe.
+			 */
+			void CleanupAwaiter()
+			{
+				FScopeLock Lock(&Semaphore->CriticalSection);
+				for (int32 i = Semaphore->WaiterHead; i < Semaphore->Waiters.Num(); ++i)
+				{
+					if (Semaphore->Waiters[i].Handle == Handle)
+					{
+						Semaphore->Waiters.RemoveAt(i);
+						break;
+					}
+				}
 			}
 		};
 
