@@ -18,9 +18,13 @@ AsyncFlowEditor (Type: Editor)
 ```
 
 The runtime module (`AsyncFlow`) uses `UAsyncFlowTickSubsystem`, a
-`UTickableWorldSubsystem` that requires a live `UWorld`. The editor module
-replaces this with `FAsyncFlowEditorTickDriver`, a `FTickableEditorObject`
+`UTickableWorldSubsystem` that drives timing awaiters (delays, conditions, tick counts).
+The editor module replaces this with `FAsyncFlowEditorTickDriver`, a `FTickableEditorObject`
 that is ticked by the editor's own frame loop — no world needed.
+
+> **v2 note:** `TTask` itself has **zero tick dependency** — only timing awaiters need a tick source.
+> Thread awaiters, sync primitives, and delegate awaiters work without any subsystem in both
+> runtime and editor contexts.
 
 Both systems are independent and can run simultaneously during PIE.
 
@@ -58,8 +62,20 @@ AsyncFlow::TTask<void> MyEditorTool::DoAsyncWork()
 Start it:
 
 ```cpp
-MyTask = DoAsyncWork();
+AsyncFlow::TTask<void> MyTask = DoAsyncWork();
 AsyncFlow::StartEditorTask(MyTask, TEXT("MyEditorTool::DoAsyncWork"));
+// MyTask is a passive observer after Start — fire-and-forget is safe.
+```
+
+Since `TTask` is now copyable and discardable, you can store a copy for status queries
+while the coroutine runs independently:
+
+```cpp
+AsyncFlow::TTask<void> MyTask = DoAsyncWork();
+AsyncFlow::StartEditorTask(MyTask, TEXT("MyEditorTool::DoAsyncWork"));
+
+// Later — check if it finished (the coroutine keeps running even if MyTask goes out of scope)
+if (MyTask.IsCompleted()) { ... }
 ```
 
 ## API Reference
@@ -145,9 +161,13 @@ to the output log. Registered by the editor module on startup.
 
 ## Thread Safety
 
-All editor awaiters and the tick driver are **editor-main-thread-only**.
+All editor awaiters and the tick driver operate on the editor main thread.
 This is the same thread as the game thread in Unreal Engine. Do not call
 scheduling functions from background threads.
+
+> **Note:** Sync primitives (`FAwaitableEvent`, `FAwaitableSemaphore`, `FAutoResetEvent`)
+> are fully thread-safe and work in editor coroutines without any special setup. They
+> do not depend on any tick source.
 
 ## PIE Interaction
 

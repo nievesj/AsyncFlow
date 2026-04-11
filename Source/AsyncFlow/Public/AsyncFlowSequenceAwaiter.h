@@ -44,14 +44,14 @@ namespace AsyncFlow
 {
 
 	/**
- * Awaiter that plays a ULevelSequence via ALevelSequenceActor and waits
- * for it to finish. Binds to the sequence player's OnFinished delegate.
- *
- * If the actor or its sequence player is null, resumes immediately.
- *
- * @note Requires the LevelSequence module. This header is a no-op if
- *       LevelSequenceActor.h is unavailable.
- */
+	 * Awaiter that plays a ULevelSequence via ALevelSequenceActor and waits
+	 * for it to finish. Binds to the sequence player's OnFinished delegate.
+	 *
+	 * If the actor or its sequence player is null, resumes immediately.
+	 *
+	 * @note Requires the LevelSequence module. This header is a no-op if
+	 *       LevelSequenceActor.h is unavailable.
+	 */
 	struct FPlaySequenceAndWaitAwaiter
 	{
 		UMovieSceneSequencePlayer* Player = nullptr;
@@ -105,11 +105,11 @@ namespace AsyncFlow
 	};
 
 	/**
- * Play a level sequence and wait for it to finish.
- *
- * @param SequenceActor  The ALevelSequenceActor placed in the level.
- * @return               An awaiter — use with co_await. Returns void.
- */
+	 * Play a level sequence and wait for it to finish.
+	 *
+	 * @param SequenceActor  The ALevelSequenceActor placed in the level.
+	 * @return               An awaiter — use with co_await. Returns void.
+	 */
 	[[nodiscard]] inline FPlaySequenceAndWaitAwaiter PlaySequenceAndWait(ALevelSequenceActor* SequenceActor)
 	{
 		FPlaySequenceAndWaitAwaiter Aw;

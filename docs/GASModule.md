@@ -12,6 +12,11 @@ Base class for abilities that use coroutines for their execution flow. Subclass 
 
 Override `ExecuteAbility()` — it returns `TTask<EAbilitySuccessType>` and is your ability's main logic.
 
+The class is `Abstract` — you must subclass it. Defaults: `LocalPredicted` net execution policy and
+`InstancedPerActor` instancing (suitable for single-player). Override the constructor to change these.
+
+> **Note:** The base `ExecuteAbility()` logs an error and `co_return`s `Failed`. Always override it in subclasses.
+
 ```cpp
 UCLASS()
 class UGA_FireSlash : public UAsyncFlowGameplayAbility
@@ -44,7 +49,7 @@ AsyncFlow::TTask<EAbilitySuccessType> UGA_FireSlash::ExecuteAbility(FAbilityPara
         co_return EAbilitySuccessType::Canceled;
     }
 
-    co_await AsyncFlow::Delay(Avatar, CooldownSeconds);
+    co_await AsyncFlow::Delay(CooldownSeconds);
     co_return EAbilitySuccessType::Finished;
 }
 ```
@@ -53,8 +58,12 @@ AsyncFlow::TTask<EAbilitySuccessType> UGA_FireSlash::ExecuteAbility(FAbilityPara
 
 1. GAS calls `ActivateAbility()`.
 2. The base class calls `ExecuteAbility()`, captures the returned `TTask`, and starts it.
-3. When the coroutine completes, the base class reads the `EAbilitySuccessType` and calls `EndAbility()` with the appropriate `bWasCancelled` flag.
-4. If GAS cancels the ability externally (e.g., stun, death), the base class calls `Cancel()` on the coroutine's flow state. The coroutine stops at the next `co_await`.
+3. Since `TTask` is now copyable and self-sustaining after `Start()`, the base class can hold a copy for state queries
+   while the coroutine runs independently.
+4. When the coroutine completes, the base class reads the `EAbilitySuccessType` and calls `EndAbility()` with the
+   appropriate `bWasCancelled` flag.
+5. If GAS cancels the ability externally (e.g., stun, death), the base class calls `Cancel()` on the task. The
+   coroutine stops at the next `co_await` boundary where the cancellation flag is detected.
 
 ### EAbilitySuccessType
 
@@ -72,22 +81,22 @@ enum class EAbilitySuccessType : uint8
 
 Wraps GAS activation data for convenient access within the coroutine.
 
-| Method | Returns |
-|--------|---------|
-| `GetAvatarCharacter()` | `ACharacter*` (or nullptr) |
-| `GetOwningActor()` | `AActor*` |
+| Method                        | Returns                    |
+|-------------------------------|----------------------------|
+| `GetAvatarCharacter()`        | `ACharacter*` (or nullptr) |
+| `GetOwningActor()`            | `AActor*`                  |
 | `GetAbilitySystemComponent()` | `UAbilitySystemComponent*` |
-| `HasValidActorInfo()` | `bool` |
+| `HasValidActorInfo()`         | `bool`                     |
 
 Fields:
 
-| Field | Type |
-|-------|------|
-| `Handle` | `FGameplayAbilitySpecHandle` |
-| `ActorInfo` | `FGameplayAbilityActorInfo` |
-| `ActivationInfo` | `FGameplayAbilityActivationInfo` |
-| `TriggerEventData` | `FGameplayEventData` |
-| `bHasTriggerEventData` | `bool` |
+| Field                  | Type                             |
+|------------------------|----------------------------------|
+| `Handle`               | `FGameplayAbilitySpecHandle`     |
+| `ActorInfo`            | `FGameplayAbilityActorInfo`      |
+| `ActivationInfo`       | `FGameplayAbilityActivationInfo` |
+| `TriggerEventData`     | `FGameplayEventData`             |
+| `bHasTriggerEventData` | `bool`                           |
 
 ---
 
@@ -97,7 +106,9 @@ Fields:
 
 ### WaitGameplayEvent
 
-Wait for a gameplay event with a matching tag on an AbilitySystemComponent. Returns the event data.
+`FWaitGameplayEventAwaiter WaitGameplayEvent(UAbilitySystemComponent* InASC, FGameplayTag EventTag)`
+
+Wait for a gameplay event with a matching tag on an AbilitySystemComponent. `co_await` yields `FGameplayEventData`.
 
 ```cpp
 UAbilitySystemComponent* ASC = Params.GetAbilitySystemComponent();
@@ -114,7 +125,9 @@ Automatically unregisters from the delegate after the first fire.
 
 ### WaitGameplayTagAdded
 
-Wait until a gameplay tag is added to the ASC.
+`FWaitGameplayTagAddedAwaiter WaitGameplayTagAdded(UAbilitySystemComponent* InASC, FGameplayTag Tag)`
+
+Wait until a gameplay tag is added to the ASC. `co_await` yields `void`.
 
 ```cpp
 co_await AsyncFlow::WaitGameplayTagAdded(
@@ -128,7 +141,9 @@ If the tag is already present, resumes immediately.
 
 ### WaitGameplayTagRemoved
 
-Wait until a gameplay tag is removed from the ASC.
+`FWaitGameplayTagRemovedAwaiter WaitGameplayTagRemoved(UAbilitySystemComponent* InASC, FGameplayTag Tag)`
+
+Wait until a gameplay tag is removed from the ASC. `co_await` yields `void`.
 
 ```cpp
 co_await AsyncFlow::WaitGameplayTagRemoved(
@@ -142,7 +157,9 @@ If the tag is already absent, resumes immediately.
 
 ### WaitAttributeChange
 
-Wait for an attribute value to change. Returns the new value.
+`FWaitAttributeChangeAwaiter WaitAttributeChange(UAbilitySystemComponent* InASC, FGameplayAttribute Attribute)`
+
+Wait for an attribute value to change. `co_await` yields `float` (the new value).
 
 ```cpp
 float NewHealth = co_await AsyncFlow::WaitAttributeChange(
@@ -155,7 +172,9 @@ Fires on the first change and automatically unregisters.
 
 ### WaitGameplayEffectRemoved
 
-Wait for an active gameplay effect to be removed.
+`FWaitGameplayEffectRemovedAwaiter WaitGameplayEffectRemoved(UAbilitySystemComponent* InASC, FActiveGameplayEffectHandle EffectHandle)`
+
+Wait for an active gameplay effect to be removed. `co_await` yields `void`.
 
 ```cpp
 FActiveGameplayEffectHandle EffectHandle = ASC->ApplyGameplayEffectToSelf(...);
@@ -198,4 +217,3 @@ AsyncFlow::TTask<EAbilitySuccessType> UGA_HealingAura::ExecuteAbility(FAbilityPa
     co_return EAbilitySuccessType::Finished;
 }
 ```
-

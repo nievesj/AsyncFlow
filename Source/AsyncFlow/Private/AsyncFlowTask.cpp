@@ -20,22 +20,30 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// AsyncFlowTask.cpp — Thread-local state management and FCancellationGuard implementation.
+// AsyncFlowTask.cpp — Thread-local state management, FCancellationGuard, and latent registration.
 //
 // GCurrentFlowState is a thread-local pointer set to the active promise during
 // Resume(). It lets CO_CONTRACT and co_verifyf access the coroutine's flow state
 // without passing it explicitly through every call frame.
+//
+// GCurrentWorldContext is set alongside GCurrentFlowState for latent-mode
+// coroutines, giving timing awaiters implicit access to the world context.
 //
 // FCancellationGuard reads GCurrentFlowState on construction to find the
 // enclosing coroutine, then increments/decrements CancellationGuardDepth
 // atomically. The atomic ops use acq_rel ordering because background awaiters
 // may read bCancelled from a different thread.
 #include "AsyncFlowTask.h"
+#include "AsyncFlowLatentAction.h"
+#include "Engine/World.h"
+#include "Engine/Engine.h"
 
 namespace AsyncFlow::Private
 {
 
 	static thread_local FAsyncFlowState* GCurrentFlowState = nullptr;
+	static thread_local UObject* GCurrentWorldContext = nullptr;
+	static thread_local FAsyncFlowLatentAction* GCurrentLatentAction = nullptr;
 
 	FAsyncFlowState* GetCurrentFlowState()
 	{
@@ -45,6 +53,62 @@ namespace AsyncFlow::Private
 	void SetCurrentFlowState(FAsyncFlowState* State)
 	{
 		GCurrentFlowState = State;
+	}
+
+	UObject* GetCurrentWorldContext()
+	{
+		return GCurrentWorldContext;
+	}
+
+	void SetCurrentWorldContext(UObject* Ctx)
+	{
+		GCurrentWorldContext = Ctx;
+	}
+
+	FAsyncFlowLatentAction* GetCurrentLatentAction()
+	{
+		return GCurrentLatentAction;
+	}
+
+	void SetCurrentLatentAction(FAsyncFlowLatentAction* Action)
+	{
+		GCurrentLatentAction = Action;
+	}
+
+	UWorld* ResolveWorld(UObject* OptionalContext)
+	{
+		if (OptionalContext)
+		{
+			return OptionalContext->GetWorld();
+		}
+		if (GCurrentWorldContext)
+		{
+			return GCurrentWorldContext->GetWorld();
+		}
+		return GEngine ? GEngine->GetCurrentPlayWorld() : nullptr;
+	}
+
+	void RegisterLatentAction(UObject* WorldContext, const FLatentActionInfo& LatentInfo, TSharedPtr<FCoroutineControlBlock<void>> CB)
+	{
+		if (!WorldContext)
+		{
+			return;
+		}
+
+		UWorld* World = WorldContext->GetWorld();
+		if (!World)
+		{
+			return;
+		}
+
+		FLatentActionManager& LatentManager = World->GetLatentActionManager();
+
+		if (LatentManager.FindExistingAction<FAsyncFlowLatentAction>(LatentInfo.CallbackTarget, LatentInfo.UUID))
+		{
+			return;
+		}
+
+		LatentManager.AddNewAction(LatentInfo.CallbackTarget, LatentInfo.UUID, new FAsyncFlowLatentAction(LatentInfo, MoveTemp(CB)));
 	}
 
 } // namespace AsyncFlow::Private

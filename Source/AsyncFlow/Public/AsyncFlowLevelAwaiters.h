@@ -44,9 +44,9 @@ namespace AsyncFlow
 	{
 
 		/**
- * Returns a unique int32 each call, used as FLatentActionInfo::UUID
- * so concurrent latent actions never collide.
- */
+		 * Returns a unique int32 each call, used as FLatentActionInfo::UUID
+		 * so concurrent latent actions never collide.
+		 */
 		inline int32 GenerateLatentUUID()
 		{
 			static std::atomic<int32> Counter{ 1000000 };
@@ -60,12 +60,12 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter that loads a streaming level by name. Wraps
- * UGameplayStatics::LoadStreamLevelBySoftObjectPtr via the latent action
- * bridge. Resumes when the level is fully loaded and visible.
- *
- * If WorldContext is null, resumes immediately (no level loads).
- */
+	 * Awaiter that loads a streaming level by name. Wraps
+	 * UGameplayStatics::LoadStreamLevel via a condition-polling bridge.
+	 * Resumes when the level is fully loaded (and visible, if requested).
+	 *
+	 * If WorldContext is null, resumes immediately (no level loads).
+	 */
 	struct FLoadStreamLevelAwaiter
 	{
 		UObject* WorldContext;
@@ -139,13 +139,13 @@ namespace AsyncFlow
 	};
 
 	/**
- * Load a streaming level and wait for it to become visible.
- *
- * @param WorldContext   Any UObject with a valid GetWorld().
- * @param LevelName     The streaming level name (e.g., "SubLevel_Forest").
- * @param bMakeVisible  Whether to make the level visible after loading.
- * @return              An awaiter — use with co_await. Returns true on success.
- */
+	 * Load a streaming level and wait for it to become visible.
+	 *
+	 * @param WorldContext   Any UObject with a valid GetWorld().
+	 * @param LevelName     The streaming level name (e.g., "SubLevel_Forest").
+	 * @param bMakeVisible  Whether to make the level visible after loading.
+	 * @return              An awaiter — use with co_await. Returns true on success.
+	 */
 	[[nodiscard]] inline FLoadStreamLevelAwaiter LoadStreamLevel(UObject* WorldContext, FName LevelName, bool bMakeVisible = true)
 	{
 		return FLoadStreamLevelAwaiter{ WorldContext, LevelName, bMakeVisible };
@@ -156,9 +156,9 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter that unloads a streaming level. Resumes when the level is
- * fully unloaded.
- */
+	 * Awaiter that unloads a streaming level. Resumes when the level is
+	 * fully unloaded.
+	 */
 	struct FUnloadStreamLevelAwaiter
 	{
 		UObject* WorldContext;
@@ -222,28 +222,28 @@ namespace AsyncFlow
 	};
 
 	/**
- * Unload a streaming level and wait for it to complete.
- *
- * @param WorldContext  Any UObject with a valid GetWorld().
- * @param LevelName    The streaming level name.
- * @return             An awaiter — use with co_await. Returns true on success.
- */
+	 * Unload a streaming level and wait for it to complete.
+	 *
+	 * @param WorldContext  Any UObject with a valid GetWorld().
+	 * @param LevelName    The streaming level name.
+	 * @return             An awaiter — use with co_await. Returns true on success.
+	 */
 	[[nodiscard]] inline FUnloadStreamLevelAwaiter UnloadStreamLevel(UObject* WorldContext, FName LevelName)
 	{
 		return FUnloadStreamLevelAwaiter{ WorldContext, LevelName };
 	}
 
 	/**
- * Open a level by name. Wraps UGameplayStatics::OpenLevel.
- *
- * @warning This triggers a full map transition. The coroutine will not
- *          resume — the world (and all coroutines in it) is destroyed.
- *
- * @param WorldContext  Any UObject with a valid GetWorld().
- * @param LevelName     Level name or full path.
- * @param bAbsolute     True for absolute URL, false for relative.
- * @param Options       Optional URL options string.
- */
+	 * Open a level by name. Wraps UGameplayStatics::OpenLevel.
+	 *
+	 * @warning This triggers a full map transition. The coroutine will not
+	 *          resume — the world (and all coroutines in it) is destroyed.
+	 *
+	 * @param WorldContext  Any UObject with a valid GetWorld().
+	 * @param LevelName     Level name or full path.
+	 * @param bAbsolute     True for absolute URL, false for relative.
+	 * @param Options       Optional URL options string.
+	 */
 	inline void OpenLevel(UObject* WorldContext, const FString& LevelName, bool bAbsolute = true, const FString& Options = FString())
 	{
 		if (!WorldContext)

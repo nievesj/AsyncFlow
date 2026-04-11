@@ -44,9 +44,9 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter struct for editor wall-clock delays. Uses FPlatformTime::Seconds().
- * Resumes immediately if Seconds <= 0 or the editor tick driver is unavailable.
- */
+	 * Awaiter struct for editor wall-clock delays. Uses FPlatformTime::Seconds().
+	 * Resumes immediately if Seconds <= 0 or the editor tick driver is unavailable.
+	 */
 	struct FEditorDelayAwaiter
 	{
 		float Seconds = 0.0f;
@@ -80,12 +80,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Suspend for Seconds of real wall-clock time in editor context.
- * No UWorld or world context required.
- *
- * @param Seconds  Duration in real seconds. Values <= 0 resume immediately.
- * @return         An awaiter — use with co_await.
- */
+	 * Suspend for Seconds of real wall-clock time in editor context.
+	 * No UWorld or world context required.
+	 *
+	 * @param Seconds  Duration in real seconds. Values <= 0 resume immediately.
+	 * @return         An awaiter — use with co_await.
+	 */
 	[[nodiscard]] inline FEditorDelayAwaiter EditorDelay(float Seconds)
 	{
 		FEditorDelayAwaiter Aw;
@@ -98,9 +98,9 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter struct that yields for exactly one editor tick.
- * Always suspends (await_ready returns false).
- */
+	 * Awaiter struct that yields for exactly one editor tick.
+	 * Always suspends (await_ready returns false).
+	 */
 	struct FEditorNextTickAwaiter
 	{
 		Private::FAwaiterAliveFlag AliveFlag;
@@ -133,11 +133,11 @@ namespace AsyncFlow
 	};
 
 	/**
- * Suspend until the next editor tick.
- * No UWorld or world context required.
- *
- * @return  An awaiter — use with co_await.
- */
+	 * Suspend until the next editor tick.
+	 * No UWorld or world context required.
+	 *
+	 * @return  An awaiter — use with co_await.
+	 */
 	[[nodiscard]] inline FEditorNextTickAwaiter EditorNextTick()
 	{
 		return FEditorNextTickAwaiter{};
@@ -148,9 +148,9 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter struct that yields for a specified number of editor ticks.
- * Resumes immediately if NumTicks <= 0.
- */
+	 * Awaiter struct that yields for a specified number of editor ticks.
+	 * Resumes immediately if NumTicks <= 0.
+	 */
 	struct FEditorTicksAwaiter
 	{
 		int32 NumTicks = 0;
@@ -184,12 +184,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Suspend for InNumTicks editor ticks.
- * No UWorld or world context required.
- *
- * @param InNumTicks  Number of editor ticks to wait. Clamped to at least 1 in the driver.
- * @return            An awaiter — use with co_await.
- */
+	 * Suspend for InNumTicks editor ticks.
+	 * No UWorld or world context required.
+	 *
+	 * @param InNumTicks  Number of editor ticks to wait. Clamped to at least 1 in the driver.
+	 * @return            An awaiter — use with co_await.
+	 */
 	[[nodiscard]] inline FEditorTicksAwaiter EditorTicks(int32 InNumTicks)
 	{
 		FEditorTicksAwaiter Aw;
@@ -202,10 +202,10 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter struct that checks a predicate every editor tick and resumes
- * the coroutine when the predicate returns true. If the predicate is
- * already true at the point of co_await, no suspension occurs.
- */
+	 * Awaiter struct that checks a predicate every editor tick and resumes
+	 * the coroutine when the predicate returns true. If the predicate is
+	 * already true at the point of co_await, no suspension occurs.
+	 */
 	struct FEditorConditionAwaiter
 	{
 		TFunction<bool()> Predicate;
@@ -239,12 +239,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Suspend until InPredicate returns true. Evaluated once per editor tick.
- * No UWorld or world context required.
- *
- * @param InPredicate  Callable returning bool. Must be safe to call from the editor main thread.
- * @return             An awaiter — use with co_await.
- */
+	 * Suspend until InPredicate returns true. Evaluated once per editor tick.
+	 * No UWorld or world context required.
+	 *
+	 * @param InPredicate  Callable returning bool. Must be safe to call from the editor main thread.
+	 * @return             An awaiter — use with co_await.
+	 */
 	[[nodiscard]] inline FEditorConditionAwaiter EditorWaitForCondition(TFunction<bool()> InPredicate)
 	{
 		FEditorConditionAwaiter Aw;
@@ -257,10 +257,10 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter struct that calls an update function every editor tick.
- * When the function returns true, the coroutine is resumed.
- * Useful for progressive editor operations (e.g., multi-frame processing).
- */
+	 * Awaiter struct that calls an update function every editor tick.
+	 * When the function returns true, the coroutine is resumed.
+	 * Useful for progressive editor operations (e.g., multi-frame processing).
+	 */
 	struct FEditorTickUpdateAwaiter
 	{
 		TFunction<bool(float DeltaTime)> UpdateFunc;
@@ -294,13 +294,13 @@ namespace AsyncFlow
 	};
 
 	/**
- * Schedule a per-tick update in editor context. Called each editor frame
- * with DeltaTime. When InUpdateFunc returns true, the coroutine resumes.
- * No UWorld or world context required.
- *
- * @param InUpdateFunc  Per-tick callable. Return true when finished.
- * @return              An awaiter — use with co_await.
- */
+	 * Schedule a per-tick update in editor context. Called each editor frame
+	 * with DeltaTime. When InUpdateFunc returns true, the coroutine resumes.
+	 * No UWorld or world context required.
+	 *
+	 * @param InUpdateFunc  Per-tick callable. Return true when finished.
+	 * @return              An awaiter — use with co_await.
+	 */
 	[[nodiscard]] inline FEditorTickUpdateAwaiter EditorTickUpdate(TFunction<bool(float)> InUpdateFunc)
 	{
 		FEditorTickUpdateAwaiter Aw;

@@ -20,37 +20,42 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// AsyncFlowEditorTask.h — Helper utilities for editor coroutines
-//
-// Convenience function for starting editor-context coroutines with optional
-// debug registration. Uses the same TTask<T> type as the runtime module.
-#pragma once
+// AsyncFlowAction.cpp — Base async action implementation.
+#include "AsyncFlowAction.h"
 
-#include "AsyncFlowTask.h"
-#include "AsyncFlowDebug.h"
-
-namespace AsyncFlow
+void UAsyncFlowAction::Activate()
 {
-
-	/**
-	 * Start an editor-context coroutine task with optional debug tracking.
-	 *
-	 * Calls Task.Start() and, if DebugName is non-empty, registers the task
-	 * with FAsyncFlowDebugger for visibility in AsyncFlow.List / AsyncFlow.EditorList.
-	 *
-	 * @tparam T          The task's result type.
-	 * @param Task        The task to start. Must be valid (not yet started).
-	 * @param DebugName   Optional human-readable name for debug tracking.
-	 */
-	template <typename T>
-	void StartEditorTask(TTask<T>& Task, const FString& DebugName = TEXT(""))
+	// Use whatever was pre-seeded by the factory. Fall back to GetWorld() only if
+	// the factory didn't set it (e.g. legacy subclasses without a world context param).
+	if (!CachedWorldContext.IsValid())
 	{
-		if (!DebugName.IsEmpty())
-		{
-			Task.SetDebugName(DebugName);
-			DebugRegisterTask(Task);
-		}
-		Task.Start();
+		CachedWorldContext = GetWorld();
 	}
+	ActiveTask = RunAction();
+	ActiveTask.Start();
+}
 
-} // namespace AsyncFlow
+void UAsyncFlowAction::Cancel()
+{
+	Super::Cancel();
+	if (ActiveTask.IsValid())
+	{
+		ActiveTask.Cancel();
+	}
+}
+
+AsyncFlow::TTask<void> UAsyncFlowAction::RunAction()
+{
+	co_await ExecuteAction(CachedWorldContext.Get());
+
+	if (bHandledBroadcast || !ShouldBroadcastDelegates())
+	{
+		co_return;
+	}
+	OnCompleted.Broadcast();
+}
+
+AsyncFlow::TTask<void> UAsyncFlowAction::ExecuteAction(UObject* InWorldContext)
+{
+	co_return;
+}

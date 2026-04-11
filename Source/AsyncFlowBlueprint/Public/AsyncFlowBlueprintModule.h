@@ -20,37 +20,15 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// AsyncFlowEditorTask.h — Helper utilities for editor coroutines
-//
-// Convenience function for starting editor-context coroutines with optional
-// debug registration. Uses the same TTask<T> type as the runtime module.
+// AsyncFlowBlueprintModule.h — IModuleInterface for the AsyncFlowBlueprint module.
 #pragma once
 
-#include "AsyncFlowTask.h"
-#include "AsyncFlowDebug.h"
+#include "Modules/ModuleManager.h"
 
-namespace AsyncFlow
+/** Blueprint integration module for AsyncFlow. */
+class FAsyncFlowBlueprintModule : public IModuleInterface
 {
-
-	/**
-	 * Start an editor-context coroutine task with optional debug tracking.
-	 *
-	 * Calls Task.Start() and, if DebugName is non-empty, registers the task
-	 * with FAsyncFlowDebugger for visibility in AsyncFlow.List / AsyncFlow.EditorList.
-	 *
-	 * @tparam T          The task's result type.
-	 * @param Task        The task to start. Must be valid (not yet started).
-	 * @param DebugName   Optional human-readable name for debug tracking.
-	 */
-	template <typename T>
-	void StartEditorTask(TTask<T>& Task, const FString& DebugName = TEXT(""))
-	{
-		if (!DebugName.IsEmpty())
-		{
-			Task.SetDebugName(DebugName);
-			DebugRegisterTask(Task);
-		}
-		Task.Start();
-	}
-
-} // namespace AsyncFlow
+public:
+	virtual void StartupModule() override;
+	virtual void ShutdownModule() override;
+};

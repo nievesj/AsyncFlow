@@ -43,10 +43,10 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter that calls Play() on a UAudioComponent and polls each tick
- * until IsPlaying() returns false. If the component is null or has no
- * valid world, resumes immediately.
- */
+	 * Awaiter that calls Play() on a UAudioComponent and polls each tick
+	 * until IsPlaying() returns false. If the component is null or has no
+	 * valid world, resumes immediately.
+	 */
 	struct FPlaySoundAwaiter
 	{
 		UAudioComponent* AudioComponent = nullptr;
@@ -94,11 +94,11 @@ namespace AsyncFlow
 	};
 
 	/**
- * Start playing audio and wait until it finishes.
- *
- * @param AudioComponent  The audio component to play. Null resumes immediately.
- * @return                An awaiter — use with co_await. Returns void.
- */
+	 * Start playing audio and wait until it finishes.
+	 *
+	 * @param AudioComponent  The audio component to play. Null resumes immediately.
+	 * @return                An awaiter — use with co_await. Returns void.
+	 */
 	[[nodiscard]] inline FPlaySoundAwaiter PlaySoundAndWait(UAudioComponent* AudioComponent)
 	{
 		return FPlaySoundAwaiter{ AudioComponent };
@@ -109,9 +109,9 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter that polls until an already-playing UAudioComponent stops.
- * If the component is not playing at the point of co_await, resumes immediately.
- */
+	 * Awaiter that polls until an already-playing UAudioComponent stops.
+	 * If the component is not playing at the point of co_await, resumes immediately.
+	 */
 	struct FWaitAudioFinishedAwaiter
 	{
 		UAudioComponent* AudioComponent = nullptr;
@@ -157,11 +157,11 @@ namespace AsyncFlow
 	};
 
 	/**
- * Wait for an already-playing audio component to finish.
- *
- * @param AudioComponent  The audio component to monitor. Null resumes immediately.
- * @return                An awaiter — use with co_await. Returns void.
- */
+	 * Wait for an already-playing audio component to finish.
+	 *
+	 * @param AudioComponent  The audio component to monitor. Null resumes immediately.
+	 * @return                An awaiter — use with co_await. Returns void.
+	 */
 	[[nodiscard]] inline FWaitAudioFinishedAwaiter WaitForAudioFinished(UAudioComponent* AudioComponent)
 	{
 		return FWaitAudioFinishedAwaiter{ AudioComponent };

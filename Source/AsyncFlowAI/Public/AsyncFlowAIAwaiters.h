@@ -44,15 +44,15 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter that issues an AI move request and waits for it to finish.
- * Binds to UPathFollowingComponent::OnRequestFinished, filtered by
- * the FAIRequestID obtained at the time of the move request.
- *
- * If the controller has no PathFollowingComponent or the move request
- * fails immediately, the awaiter resumes synchronously with Aborted/Invalid.
- *
- * Destructor unbinds the delegate if the coroutine is cancelled mid-move.
- */
+	 * Awaiter that issues an AI move request and waits for it to finish.
+	 * Binds to UPathFollowingComponent::OnRequestFinished, filtered by
+	 * the FAIRequestID obtained at the time of the move request.
+	 *
+	 * If the controller has no PathFollowingComponent or the move request
+	 * fails immediately, the awaiter resumes synchronously with Aborted/Invalid.
+	 *
+	 * Destructor unbinds the delegate if the coroutine is cancelled mid-move.
+	 */
 	struct FAIMoveToAwaiter
 	{
 		AAIController* Controller = nullptr;
@@ -160,26 +160,26 @@ namespace AsyncFlow
 	};
 
 	/**
- * Issue an AI move-to-location request and wait for completion.
- *
- * @param Controller        The AI controller to command.
- * @param GoalLocation      World-space destination.
- * @param AcceptanceRadius  Distance from goal at which the move succeeds. -1 uses default.
- * @return                  An awaiter — co_await yields EPathFollowingResult::Type.
- */
+	 * Issue an AI move-to-location request and wait for completion.
+	 *
+	 * @param Controller        The AI controller to command.
+	 * @param GoalLocation      World-space destination.
+	 * @param AcceptanceRadius  Distance from goal at which the move succeeds. -1 uses default.
+	 * @return                  An awaiter — co_await yields EPathFollowingResult::Type.
+	 */
 	[[nodiscard]] inline FAIMoveToAwaiter AIMoveTo(AAIController* Controller, const FVector& GoalLocation, float AcceptanceRadius = -1.0f)
 	{
 		return FAIMoveToAwaiter{ Controller, GoalLocation, nullptr, AcceptanceRadius, false };
 	}
 
 	/**
- * Issue an AI move-to-actor request and wait for completion.
- *
- * @param Controller        The AI controller to command.
- * @param GoalActor         The target actor to move toward.
- * @param AcceptanceRadius  Distance from goal at which the move succeeds. -1 uses default.
- * @return                  An awaiter — co_await yields EPathFollowingResult::Type.
- */
+	 * Issue an AI move-to-actor request and wait for completion.
+	 *
+	 * @param Controller        The AI controller to command.
+	 * @param GoalActor         The target actor to move toward.
+	 * @param AcceptanceRadius  Distance from goal at which the move succeeds. -1 uses default.
+	 * @return                  An awaiter — co_await yields EPathFollowingResult::Type.
+	 */
 	[[nodiscard]] inline FAIMoveToAwaiter AIMoveTo(AAIController* Controller, AActor* GoalActor, float AcceptanceRadius = -1.0f)
 	{
 		return FAIMoveToAwaiter{ Controller, FVector::ZeroVector, GoalActor, AcceptanceRadius, true };
@@ -190,9 +190,9 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter that performs asynchronous pathfinding via UNavigationSystemV1.
- * Resumes with the query result type and the computed path (if successful).
- */
+	 * Awaiter that performs asynchronous pathfinding via UNavigationSystemV1.
+	 * Resumes with the query result type and the computed path (if successful).
+	 */
 	struct FFindPathAsyncAwaiter
 	{
 		UObject* WorldContext = nullptr;
@@ -255,12 +255,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Perform asynchronous pathfinding.
- *
- * @param WorldContext  Any UObject with a valid GetWorld().
- * @param Query         Pre-configured pathfinding query.
- * @return              An awaiter — co_await yields TTuple<ENavigationQueryResult::Type, FNavPathSharedPtr>.
- */
+	 * Perform asynchronous pathfinding.
+	 *
+	 * @param WorldContext  Any UObject with a valid GetWorld().
+	 * @param Query         Pre-configured pathfinding query.
+	 * @return              An awaiter — co_await yields TTuple<ENavigationQueryResult::Type, FNavPathSharedPtr>.
+	 */
 	[[nodiscard]] inline FFindPathAsyncAwaiter FindPathAsync(UObject* WorldContext, const FPathFindingQuery& Query)
 	{
 		return FFindPathAsyncAwaiter{ WorldContext, Query };
@@ -271,12 +271,12 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter that wraps UNavigationSystemV1::SimpleMoveToLocation/Actor.
- * Unlike AIMoveTo, this does not require an AAIController — any AController works.
- * Listens on UPathFollowingComponent::OnRequestFinished for completion.
- *
- * If the controller has no PathFollowingComponent, resumes immediately.
- */
+	 * Awaiter that wraps UNavigationSystemV1::SimpleMoveToLocation/Actor.
+	 * Unlike AIMoveTo, this does not require an AAIController — any AController works.
+	 * Listens on UPathFollowingComponent::OnRequestFinished for completion.
+	 *
+	 * If the controller has no PathFollowingComponent, resumes immediately.
+	 */
 	struct FSimpleMoveToAwaiter
 	{
 		AController* Controller = nullptr;
@@ -361,24 +361,24 @@ namespace AsyncFlow
 	};
 
 	/**
- * Simple move to a world location. No result type — just waits for completion.
- *
- * @param Controller    Any AController (not limited to AAIController).
- * @param GoalLocation  World-space destination.
- * @return              An awaiter — use with co_await. Returns void.
- */
+	 * Simple move to a world location. No result type — just waits for completion.
+	 *
+	 * @param Controller    Any AController (not limited to AAIController).
+	 * @param GoalLocation  World-space destination.
+	 * @return              An awaiter — use with co_await. Returns void.
+	 */
 	[[nodiscard]] inline FSimpleMoveToAwaiter SimpleMoveTo(AController* Controller, const FVector& GoalLocation)
 	{
 		return FSimpleMoveToAwaiter{ Controller, GoalLocation, nullptr, false };
 	}
 
 	/**
- * Simple move to an actor.
- *
- * @param Controller  Any AController.
- * @param GoalActor   The target actor.
- * @return            An awaiter — use with co_await. Returns void.
- */
+	 * Simple move to an actor.
+	 *
+	 * @param Controller  Any AController.
+	 * @param GoalActor   The target actor.
+	 * @return            An awaiter — use with co_await. Returns void.
+	 */
 	[[nodiscard]] inline FSimpleMoveToAwaiter SimpleMoveTo(AController* Controller, AActor* GoalActor)
 	{
 		return FSimpleMoveToAwaiter{ Controller, FVector::ZeroVector, GoalActor, true };

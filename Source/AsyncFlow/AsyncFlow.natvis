@@ -1,31 +1,43 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
 
-	<!-- AsyncFlow::TTask<T> -->
-	<Type Name="AsyncFlow::TTask&lt;*&gt;">
-		<DisplayString Condition="Handle._Ptr == 0">{{ invalid }}</DisplayString>
-		<DisplayString Condition="Handle._Ptr != 0 &amp;&amp; Handle._Ptr->_Promise.bCompleted._Storage != 0">{{ completed, cancelled={Handle._Ptr->_Promise.FlowState->bCancelled._Storage != 0}, name="{Handle._Ptr->_Promise.FlowState->DebugName,sb}" }}</DisplayString>
-		<DisplayString Condition="Handle._Ptr != 0 &amp;&amp; Handle._Ptr->_Promise.bCompleted._Storage == 0 &amp;&amp; Handle._Ptr->_Promise.FlowState->bCancelled._Storage != 0">{{ cancelled, name="{Handle._Ptr->_Promise.FlowState->DebugName,sb}" }}</DisplayString>
-		<DisplayString Condition="Handle._Ptr != 0 &amp;&amp; Handle._Ptr->_Promise.bCompleted._Storage == 0">{{ running, name="{Handle._Ptr->_Promise.FlowState->DebugName,sb}" }}</DisplayString>
-		<Expand>
-			<Item Name="IsValid">Handle._Ptr != 0</Item>
-			<Item Name="DebugName" Condition="Handle._Ptr != 0">Handle._Ptr->_Promise.FlowState->DebugName</Item>
-			<Item Name="bCompleted" Condition="Handle._Ptr != 0">Handle._Ptr->_Promise.bCompleted._Storage</Item>
-			<Item Name="bCancelled" Condition="Handle._Ptr != 0">Handle._Ptr->_Promise.FlowState->bCancelled._Storage</Item>
-			<Item Name="GuardDepth" Condition="Handle._Ptr != 0">Handle._Ptr->_Promise.FlowState->CancellationGuardDepth._Storage</Item>
-		</Expand>
-	</Type>
+    <!-- AsyncFlow::TTask<T> — shared ownership via FCoroutineControlBlock -->
+    <Type Name="AsyncFlow::TTask&lt;*&gt;">
+        <DisplayString Condition="CB.Object == 0">{{ invalid }}</DisplayString>
+        <DisplayString Condition="CB.Object != 0 &amp;&amp; CB.Object->bCompleted._Storage != 0">{{ completed,
+            cancelled={CB.Object->FlowState.Object->bCancelled._Storage != 0},
+            name="{CB.Object->FlowState.Object->DebugName,sb}" }}
+        </DisplayString>
+        <DisplayString
+                Condition="CB.Object != 0 &amp;&amp; CB.Object->bCompleted._Storage == 0 &amp;&amp; CB.Object->FlowState.Object->bCancelled._Storage != 0">
+            {{ cancelled, name="{CB.Object->FlowState.Object->DebugName,sb}" }}
+        </DisplayString>
+        <DisplayString Condition="CB.Object != 0 &amp;&amp; CB.Object->bCompleted._Storage == 0">{{ running,
+            name="{CB.Object->FlowState.Object->DebugName,sb}" }}
+        </DisplayString>
+        <Expand>
+            <Item Name="IsValid">CB.Object != 0</Item>
+            <Item Name="DebugName" Condition="CB.Object != 0">CB.Object->FlowState.Object->DebugName</Item>
+            <Item Name="bCompleted" Condition="CB.Object != 0">CB.Object->bCompleted._Storage</Item>
+            <Item Name="bStarted" Condition="CB.Object != 0">CB.Object->bStarted._Storage</Item>
+            <Item Name="bCancelled" Condition="CB.Object != 0">CB.Object->FlowState.Object->bCancelled._Storage</Item>
+            <Item Name="GuardDepth" Condition="CB.Object != 0">
+                CB.Object->FlowState.Object->CancellationGuardDepth._Storage
+            </Item>
+        </Expand>
+    </Type>
 
-	<!-- AsyncFlow::TGenerator<T> -->
-	<Type Name="AsyncFlow::TGenerator&lt;*&gt;">
-		<DisplayString Condition="Handle._Ptr == 0">{{ exhausted }}</DisplayString>
-		<DisplayString Condition="Handle._Ptr != 0">{{ active }}</DisplayString>
-	</Type>
+    <!-- AsyncFlow::TGenerator<T> -->
+    <Type Name="AsyncFlow::TGenerator&lt;*&gt;">
+        <DisplayString Condition="Handle._Ptr == 0">{{ exhausted }}</DisplayString>
+        <DisplayString Condition="Handle._Ptr != 0">{{ active }}</DisplayString>
+    </Type>
 
-	<!-- AsyncFlow::FAsyncFlowState -->
-	<Type Name="AsyncFlow::FAsyncFlowState">
-		<DisplayString>{{ cancelled={bCancelled._Storage != 0}, guards={CancellationGuardDepth._Storage}, contracts={ContractChecks.ArrayNum}, name="{DebugName,sb}" }}</DisplayString>
-	</Type>
+    <!-- AsyncFlow::FAsyncFlowState -->
+    <Type Name="AsyncFlow::FAsyncFlowState">
+        <DisplayString>{{ cancelled={bCancelled._Storage != 0}, guards={CancellationGuardDepth._Storage},
+            contracts={ContractChecks.ArrayNum}, name="{DebugName,sb}" }}
+        </DisplayString>
+    </Type>
 
 </AutoVisualizer>
-

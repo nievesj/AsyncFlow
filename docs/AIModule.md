@@ -37,18 +37,19 @@ EPathFollowingResult::Type Result = co_await AsyncFlow::AIMoveTo(
 
 ### Return Values
 
-| Value | Meaning |
-|-------|---------|
-| `EPathFollowingResult::Success` | Reached the goal |
+| Value                           | Meaning                    |
+|---------------------------------|----------------------------|
+| `EPathFollowingResult::Success` | Reached the goal           |
 | `EPathFollowingResult::Aborted` | Path failed or was aborted |
-| `EPathFollowingResult::Invalid` | No controller provided |
+| `EPathFollowingResult::Invalid` | No controller provided     |
 
 ### Edge Cases
 
 - If the AI is already at the goal, returns `Success` immediately.
 - If pathfinding fails synchronously, returns `Aborted` immediately.
 - If the `PathFollowingComponent` is missing, returns `Aborted` immediately.
-- The awaiter listens to `OnRequestFinished` filtered by request ID, so concurrent move requests don't cross-contaminate.
+- The awaiter listens to `OnRequestFinished` filtered by request ID, so concurrent move requests don't
+  cross-contaminate.
 
 ---
 
@@ -74,16 +75,17 @@ if (ResultType == ENavigationQueryResult::Success && Path.IsValid())
 
 ### Return Values
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `ResultType` | `ENavigationQueryResult::Type` | `Success`, `Fail`, or `Error` |
-| `Path` | `FNavPathSharedPtr` | The computed navigation path (shared pointer) |
+| Field        | Type                           | Description                                   |
+|--------------|--------------------------------|-----------------------------------------------|
+| `ResultType` | `ENavigationQueryResult::Type` | `Success`, `Fail`, or `Error`                 |
+| `Path`       | `FNavPathSharedPtr`            | The computed navigation path (shared pointer) |
 
 ---
 
 ## SimpleMoveTo
 
-Fire-and-forget move via `UNavigationSystemV1::SimpleMoveToLocation` / `SimpleMoveToActor`. Waits for the move to complete.
+Fire-and-forget move via `UNavigationSystemV1::SimpleMoveToLocation` / `SimpleMoveToActor`. Waits for the move to
+complete.
 
 Works with any `AController`, not just `AAIController`.
 
@@ -126,14 +128,13 @@ AsyncFlow::TTask<void> AMyAIController::PatrolRoute()
             if (Result != EPathFollowingResult::Success)
             {
                 // Path blocked — wait and retry
-                co_await AsyncFlow::Delay(this, 2.0f);
+                co_await AsyncFlow::Delay(2.0f);
                 continue;
             }
 
             // Wait at waypoint
-            co_await AsyncFlow::Delay(this, IdleTimeAtWaypoint);
+            co_await AsyncFlow::Delay(IdleTimeAtWaypoint);
         }
     }
 }
 ```
-
