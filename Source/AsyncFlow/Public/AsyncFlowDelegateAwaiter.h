@@ -45,19 +45,19 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Primary template for multicast delegates with parameters.
- * Specializations below handle TMulticastDelegate<void(Args...)>
- * and the void (no-args) case separately.
- */
+	 * Primary template for multicast delegates with parameters.
+	 * Specializations below handle TMulticastDelegate<void(Args...)>
+	 * and the void (no-args) case separately.
+	 */
 	template <typename DelegateType>
 	struct TWaitForDelegateAwaiter;
 
 	/**
- * Awaiter for TMulticastDelegate<void(Args...)>.
- * Captures broadcast arguments as a TTuple and unbinds after the first broadcast.
- *
- * @tparam Args  Parameter types of the multicast delegate signature.
- */
+	 * Awaiter for TMulticastDelegate<void(Args...)>.
+	 * Captures broadcast arguments as a TTuple and unbinds after the first broadcast.
+	 *
+	 * @tparam Args  Parameter types of the multicast delegate signature.
+	 */
 	template <typename... Args>
 	struct TWaitForDelegateAwaiter<TMulticastDelegate<void(Args...)>>
 	{
@@ -160,12 +160,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Wait for a multicast delegate to fire once.
- * Arguments are captured and returned as a TTuple.
- *
- * @param Delegate  Reference to the multicast delegate to listen on.
- * @return          An awaiter — co_await yields TTuple<decay_t<Args>...>.
- */
+	 * Wait for a multicast delegate to fire once.
+	 * Arguments are captured and returned as a TTuple.
+	 *
+	 * @param Delegate  Reference to the multicast delegate to listen on.
+	 * @return          An awaiter — co_await yields TTuple<decay_t<Args>...>.
+	 */
 	template <typename... Args>
 	[[nodiscard]] TWaitForDelegateAwaiter<TMulticastDelegate<void(Args...)>> WaitForDelegate(TMulticastDelegate<void(Args...)>& Delegate)
 	{
@@ -177,14 +177,14 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter for TDelegate<void(Args...)>. Binds a lambda, captures the
- * invocation arguments as a TTuple, unbinds, and resumes the coroutine.
- *
- * @tparam Args  Parameter types of the unicast delegate signature.
- *
- * @warning Overwrites any existing binding on the delegate. The previous
- *          binding is lost.
- */
+	 * Awaiter for TDelegate<void(Args...)>. Binds a lambda, captures the
+	 * invocation arguments as a TTuple, unbinds, and resumes the coroutine.
+	 *
+	 * @tparam Args  Parameter types of the unicast delegate signature.
+	 *
+	 * @warning Overwrites any existing binding on the delegate. The previous
+	 *          binding is lost.
+	 */
 	template <typename... Args>
 	struct TWaitForUnicastDelegateAwaiter
 	{
@@ -285,11 +285,11 @@ namespace AsyncFlow
 	};
 
 	/**
- * Wait for a unicast delegate to fire once.
- *
- * @param Delegate  Reference to the unicast delegate to bind.
- * @return          An awaiter — co_await yields TTuple<decay_t<Args>...>, or void for no-args.
- */
+	 * Wait for a unicast delegate to fire once.
+	 *
+	 * @param Delegate  Reference to the unicast delegate to bind.
+	 * @return          An awaiter — co_await yields TTuple<decay_t<Args>...>, or void for no-args.
+	 */
 	template <typename... Args>
 	[[nodiscard]] TWaitForUnicastDelegateAwaiter<Args...> WaitForDelegate(TDelegate<void(Args...)>& Delegate)
 	{
@@ -301,14 +301,14 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Manual callback awaiter. Create one, co_await it, then call SetResult()
- * (or SetReady() for void) from your callback to resume the coroutine.
- *
- * Unlike the delegate awaiters, this does not bind to any UE delegate
- * automatically — you wire it up yourself. Useful for third-party APIs.
- *
- * @tparam T  The result type. Use void for no result.
- */
+	 * Manual callback awaiter. Create one, co_await it, then call SetResult()
+	 * (or SetReady() for void) from your callback to resume the coroutine.
+	 *
+	 * Unlike the delegate awaiters, this does not bind to any UE delegate
+	 * automatically — you wire it up yourself. Useful for third-party APIs.
+	 *
+	 * @tparam T  The result type. Use void for no result.
+	 */
 	template <typename T = void>
 	struct TCallbackAwaiter
 	{
@@ -331,10 +331,10 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Call from your callback to resume the coroutine with a value.
-	 *
-	 * @param Value  The result to deliver to the co_await expression.
-	 */
+		 * Call from your callback to resume the coroutine with a value.
+		 *
+		 * @param Value  The result to deliver to the co_await expression.
+		 */
 		void SetResult(T Value)
 		{
 			Result.Emplace(MoveTemp(Value));
@@ -381,18 +381,18 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Wraps any function that accepts a completion callback as its last argument.
- * The SetupFunc receives a TFunction<void(T)> that it must call when the
- * async operation finishes. The coroutine suspends until that callback fires.
- *
- * @tparam T  The callback parameter type. Use void for no result.
- *
- * Usage:
- *   auto Result = co_await AsyncFlow::Chain<int32>([](TFunction<void(int32)> Callback)
- *   {
- *       SomeAsyncAPI(MoveTemp(Callback));
- *   });
- */
+	 * Wraps any function that accepts a completion callback as its last argument.
+	 * The SetupFunc receives a TFunction<void(T)> that it must call when the
+	 * async operation finishes. The coroutine suspends until that callback fires.
+	 *
+	 * @tparam T  The callback parameter type. Use void for no result.
+	 *
+	 * Usage:
+	 *   auto Result = co_await AsyncFlow::Chain<int32>([](TFunction<void(int32)> Callback)
+	 *   {
+	 *       SomeAsyncAPI(MoveTemp(Callback));
+	 *   });
+	 */
 	template <typename T>
 	struct TChainAwaiter
 	{
@@ -451,12 +451,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Wrap a callback-based async function as a co_awaitable.
- *
- * @tparam T          The callback parameter type (void for no result).
- * @param SetupFunc   A callable that receives TFunction<void(T)> and must invoke it on completion.
- * @return            An awaiter — co_await yields T (or void).
- */
+	 * Wrap a callback-based async function as a co_awaitable.
+	 *
+	 * @tparam T          The callback parameter type (void for no result).
+	 * @param SetupFunc   A callable that receives TFunction<void(T)> and must invoke it on completion.
+	 * @return            An awaiter — co_await yields T (or void).
+	 */
 	template <typename T = void>
 	[[nodiscard]] TChainAwaiter<T> Chain(TFunction<void(TFunction<void(T)>)> SetupFunc)
 	{

@@ -44,9 +44,9 @@ namespace AsyncFlow::Private
 {
 
 	/**
- * Which clock drives a timed delay entry.
- * The subsystem reads the corresponding UWorld time source each tick.
- */
+	 * Which clock drives a timed delay entry.
+	 * The subsystem reads the corresponding UWorld time source each tick.
+	 */
 	enum class EDelayTimeSource : uint8
 	{
 		GameTime,	  ///< UWorld::GetTimeSeconds() — respects pause and global dilation.
@@ -56,13 +56,13 @@ namespace AsyncFlow::Private
 	};
 
 	/**
- * Entry for a timed resume. Holds the coroutine handle, the absolute
- * time at which to resume, and the clock source.
- *
- * bAlive is shared with the awaiter's FAwaiterAliveFlag. When the awaiter
- * is destroyed mid-suspension, *bAlive becomes false and the subsystem
- * discards this entry on the next tick instead of resuming a dead frame.
- */
+	 * Entry for a timed resume. Holds the coroutine handle, the absolute
+	 * time at which to resume, and the clock source.
+	 *
+	 * bAlive is shared with the awaiter's FAwaiterAliveFlag. When the awaiter
+	 * is destroyed mid-suspension, *bAlive becomes false and the subsystem
+	 * discards this entry on the next tick instead of resuming a dead frame.
+	 */
 	struct FDelayedResume
 	{
 		std::coroutine_handle<> Handle;
@@ -72,10 +72,10 @@ namespace AsyncFlow::Private
 	};
 
 	/**
- * Entry for actor-dilated delays. RemainingSeconds is decremented each
- * tick by DeltaTime * Actor->CustomTimeDilation. If the actor is GC'd
- * (TWeakObjectPtr becomes invalid), the entry is discarded.
- */
+	 * Entry for actor-dilated delays. RemainingSeconds is decremented each
+	 * tick by DeltaTime * Actor->CustomTimeDilation. If the actor is GC'd
+	 * (TWeakObjectPtr becomes invalid), the entry is discarded.
+	 */
 	struct FActorDilatedResume
 	{
 		std::coroutine_handle<> Handle;
@@ -85,9 +85,9 @@ namespace AsyncFlow::Private
 	};
 
 	/**
- * Entry for tick-count resumes. RemainingTicks is decremented by 1
- * each frame. When it hits 0, the coroutine is resumed.
- */
+	 * Entry for tick-count resumes. RemainingTicks is decremented by 1
+	 * each frame. When it hits 0, the coroutine is resumed.
+	 */
 	struct FTickResume
 	{
 		std::coroutine_handle<> Handle;
@@ -96,12 +96,12 @@ namespace AsyncFlow::Private
 	};
 
 	/**
- * Entry for condition-based resumes. The Predicate is called each tick;
- * when it returns true, the coroutine is resumed and the entry is removed.
- *
- * Context is held via TWeakObjectPtr. If the context object is GC'd,
- * the entry is silently discarded.
- */
+	 * Entry for condition-based resumes. The Predicate is called each tick;
+	 * when it returns true, the coroutine is resumed and the entry is removed.
+	 *
+	 * Context is held via TWeakObjectPtr. If the context object is GC'd,
+	 * the entry is silently discarded.
+	 */
 	struct FConditionResume
 	{
 		std::coroutine_handle<> Handle;
@@ -111,10 +111,10 @@ namespace AsyncFlow::Private
 	};
 
 	/**
- * Entry for per-tick updates (Timeline, MoveComponentTo, etc.).
- * UpdateFunc is called each frame with DeltaTime. When it returns true,
- * the entry is removed and the coroutine Handle is resumed.
- */
+	 * Entry for per-tick updates (Timeline, MoveComponentTo, etc.).
+	 * UpdateFunc is called each frame with DeltaTime. When it returns true,
+	 * the entry is removed and the coroutine Handle is resumed.
+	 */
 	struct FTickUpdate
 	{
 		std::coroutine_handle<> Handle;

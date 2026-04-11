@@ -62,14 +62,14 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter that interpolates a float from Start to End over Duration seconds,
- * calling UpdateFunc each tick with the current interpolated value.
- * Resumes the coroutine when Duration elapses.
- *
- * Uses the tick subsystem's ScheduleTickUpdate. Accumulated elapsed time
- * may overshoot Duration by one frame's DeltaTime — the final callback
- * clamps Alpha to 1.0.
- */
+	 * Awaiter that interpolates a float from Start to End over Duration seconds,
+	 * calling UpdateFunc each tick with the current interpolated value.
+	 * Resumes the coroutine when Duration elapses.
+	 *
+	 * Uses the tick subsystem's ScheduleTickUpdate. Accumulated elapsed time
+	 * may overshoot Duration by one frame's DeltaTime — the final callback
+	 * clamps Alpha to 1.0.
+	 */
 	struct FTimelineAwaiter
 	{
 		UObject* WorldContext = nullptr;
@@ -150,15 +150,15 @@ namespace AsyncFlow
 	};
 
 	/**
- * Interpolate a float value from Start to End over Duration seconds.
- *
- * @param WorldContext    Any UObject with a valid GetWorld().
- * @param From            Starting value.
- * @param To              Ending value.
- * @param Duration        Time in seconds. Values <= 0 call UpdateCallback(To) once and resume.
- * @param UpdateCallback  Called each tick with the current interpolated value.
- * @return                An awaiter — use with co_await. Returns void.
- */
+	 * Interpolate a float value from Start to End over Duration seconds.
+	 *
+	 * @param WorldContext    Any UObject with a valid GetWorld().
+	 * @param From            Starting value.
+	 * @param To              Ending value.
+	 * @param Duration        Time in seconds. Values <= 0 call UpdateCallback(To) once and resume.
+	 * @param UpdateCallback  Called each tick with the current interpolated value.
+	 * @return                An awaiter — use with co_await. Returns void.
+	 */
 	[[nodiscard]] inline FTimelineAwaiter Timeline(UObject* WorldContext, float From, float To, float Duration, TFunction<void(float)> UpdateCallback)
 	{
 		FTimelineAwaiter Aw;
@@ -175,10 +175,10 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter that interpolates a USceneComponent's transform from its current
- * position/rotation to a target over Duration seconds. Applies both
- * location and rotation interpolation per tick.
- */
+	 * Awaiter that interpolates a USceneComponent's transform from its current
+	 * position/rotation to a target over Duration seconds. Applies both
+	 * location and rotation interpolation per tick.
+	 */
 	struct FMoveComponentToAwaiter
 	{
 		USceneComponent* Component = nullptr;
@@ -284,16 +284,16 @@ namespace AsyncFlow
 	};
 
 	/**
- * Smoothly move a scene component to a target transform over time.
- *
- * @param Component        The component to move.
- * @param TargetLocation   Target world location.
- * @param TargetRotation   Target world rotation.
- * @param Duration         Interpolation time in seconds. Values <= 0 snap instantly.
- * @param bEaseIn          Apply ease-in curve.
- * @param bEaseOut         Apply ease-out curve.
- * @return                 An awaiter — use with co_await. Returns void.
- */
+	 * Smoothly move a scene component to a target transform over time.
+	 *
+	 * @param Component        The component to move.
+	 * @param TargetLocation   Target world location.
+	 * @param TargetRotation   Target world rotation.
+	 * @param Duration         Interpolation time in seconds. Values <= 0 snap instantly.
+	 * @param bEaseIn          Apply ease-in curve.
+	 * @param bEaseOut         Apply ease-out curve.
+	 * @return                 An awaiter — use with co_await. Returns void.
+	 */
 	[[nodiscard]] inline FMoveComponentToAwaiter MoveComponentTo(
 		USceneComponent* Component,
 		const FVector& TargetLocation,
@@ -454,9 +454,9 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Timeline that accumulates real (wall-clock) time instead of game time.
- * Useful for UI animations that should run during pause.
- */
+	 * Timeline that accumulates real (wall-clock) time instead of game time.
+	 * Useful for UI animations that should run during pause.
+	 */
 	struct FRealTimelineAwaiter
 	{
 		UObject* WorldContext = nullptr;
@@ -558,12 +558,12 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter that waits for the world's end-of-frame delegate.
- * The engine fires FWorldDelegates::OnWorldPostActorTick at the end of the
- * actor-tick phase. The coroutine resumes in that callback.
- *
- * If no world is available, falls back to a 1-tick delay.
- */
+	 * Awaiter that waits for the world's end-of-frame delegate.
+	 * The engine fires FWorldDelegates::OnWorldPostActorTick at the end of the
+	 * actor-tick phase. The coroutine resumes in that callback.
+	 *
+	 * If no world is available, falls back to a 1-tick delay.
+	 */
 	struct FWaitForEndOfFrameAwaiter
 	{
 		UObject* WorldContext = nullptr;
@@ -606,11 +606,11 @@ namespace AsyncFlow
 	};
 
 	/**
- * Suspend until the end of the current frame.
- *
- * @param WorldContext  Any UObject with a valid GetWorld().
- * @return             An awaiter — use with co_await. Returns void.
- */
+	 * Suspend until the end of the current frame.
+	 *
+	 * @param WorldContext  Any UObject with a valid GetWorld().
+	 * @return             An awaiter — use with co_await. Returns void.
+	 */
 	[[nodiscard]] inline FWaitForEndOfFrameAwaiter WaitForEndOfFrame(UObject* WorldContext)
 	{
 		FWaitForEndOfFrameAwaiter Aw;
@@ -623,14 +623,14 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter that wraps FTimerManager::SetTimer. The coroutine suspends until
- * the timer fires. Supports one-shot timers only (not looping).
- * If the world or timer manager is unavailable, resumes immediately.
- *
- * @note Unlike Delay(), this goes through UE's timer system rather than
- *       the tick subsystem. Useful when you need timer handle control
- *       (e.g., querying time remaining).
- */
+	 * Awaiter that wraps FTimerManager::SetTimer. The coroutine suspends until
+	 * the timer fires. Supports one-shot timers only (not looping).
+	 * If the world or timer manager is unavailable, resumes immediately.
+	 *
+	 * @note Unlike Delay(), this goes through UE's timer system rather than
+	 *       the tick subsystem. Useful when you need timer handle control
+	 *       (e.g., querying time remaining).
+	 */
 	struct FTimerAwaiter
 	{
 		UObject* WorldContext = nullptr;
@@ -682,12 +682,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Set a timer and co_await it.
- *
- * @param WorldContext  Any UObject with a valid GetWorld().
- * @param Seconds       Delay in seconds before the timer fires.
- * @return              An awaiter — use with co_await. Returns void.
- */
+	 * Set a timer and co_await it.
+	 *
+	 * @param WorldContext  Any UObject with a valid GetWorld().
+	 * @param Seconds       Delay in seconds before the timer fires.
+	 * @return              An awaiter — use with co_await. Returns void.
+	 */
 	[[nodiscard]] inline FTimerAwaiter SetTimerAndWait(UObject* WorldContext, float Seconds)
 	{
 		FTimerAwaiter Aw;

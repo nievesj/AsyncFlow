@@ -91,23 +91,22 @@ class UWorld;
 
 namespace AsyncFlow
 {
-
 	// ============================================================================
 	// FAsyncFlowState — shared cancellation / contract / guard state
 	// ============================================================================
 
 	/**
- * Mutable state shared between a coroutine and its TTask handle.
- * Tracks cancellation, contract predicates, guard depth, and debug info.
- *
- * Allocated once per coroutine via TSharedPtr in TTaskPromise. Both the
- * TTask owner and any awaiters that need to propagate cancellation hold
- * shared references.
- *
- * Most fields are game-thread-only. The two atomics (bCancelled,
- * CancellationGuardDepth) are safe to read from background threads
- * but should only be written from the game thread under normal use.
- */
+	 * Mutable state shared between a coroutine and its TTask handle.
+	 * Tracks cancellation, contract predicates, guard depth, and debug info.
+	 *
+	 * Allocated once per coroutine via TSharedPtr in TTaskPromise. Both the
+	 * TTask owner and any awaiters that need to propagate cancellation hold
+	 * shared references.
+	 *
+	 * Most fields are game-thread-only. The two atomics (bCancelled,
+	 * CancellationGuardDepth) are safe to read from background threads
+	 * but should only be written from the game thread under normal use.
+	 */
 	struct ASYNCFLOW_API FAsyncFlowState
 	{
 		/** True once Cancel() has been called. Checked at every co_await boundary. */
@@ -117,11 +116,11 @@ namespace AsyncFlow
 		std::atomic<int32> CancellationGuardDepth{ 0 };
 
 		/**
-	 * Contract predicates registered via CO_CONTRACT. Checked before each suspension.
-	 * If any predicate returns false, the coroutine cancels at the next co_await.
-	 *
-	 * NOT thread-safe — must only be mutated from the game thread before the task starts.
-	 */
+		 * Contract predicates registered via CO_CONTRACT. Checked before each suspension.
+		 * If any predicate returns false, the coroutine cancels at the next co_await.
+		 *
+		 * NOT thread-safe — must only be mutated from the game thread before the task starts.
+		 */
 		TArray<TFunction<bool()>> ContractChecks;
 
 		/** Fires exactly once when Cancel() is first called. */
@@ -143,9 +142,9 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Mark this coroutine as cancelled and fire OnCancelledCallback (once).
-	 * Idempotent — calling Cancel() multiple times has no additional effect.
-	 */
+		 * Mark this coroutine as cancelled and fire OnCancelledCallback (once).
+		 * Idempotent — calling Cancel() multiple times has no additional effect.
+		 */
 		void Cancel()
 		{
 			const bool bWasCancelled = bCancelled.exchange(true, std::memory_order_acq_rel);
@@ -169,10 +168,10 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Composite check used at co_await boundaries.
-	 * @return true if the coroutine should stop (cancelled or contract violation),
-	 *         false if execution should continue. Respects guard depth.
-	 */
+		 * Composite check used at co_await boundaries.
+		 * @return true if the coroutine should stop (cancelled or contract violation),
+		 *         false if execution should continue. Respects guard depth.
+		 */
 		bool ShouldCancel() const
 		{
 			if (IsGuarded())
@@ -202,15 +201,15 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * While an FCancellationGuard is alive, the enclosing coroutine's
- * co_await boundaries skip cancellation and contract checks.
- * Nests correctly — each guard increments CancellationGuardDepth.
- *
- * Grab the guard at the top of a critical section (e.g., multi-step
- * rollback logic) where partial execution would leave bad state.
- *
- * Game-thread-only. Non-copyable.
- */
+	 * While an FCancellationGuard is alive, the enclosing coroutine's
+	 * co_await boundaries skip cancellation and contract checks.
+	 * Nests correctly — each guard increments CancellationGuardDepth.
+	 *
+	 * Grab the guard at the top of a critical section (e.g., multi-step
+	 * rollback logic) where partial execution would leave bad state.
+	 *
+	 * Game-thread-only. Non-copyable.
+	 */
 	struct ASYNCFLOW_API FCancellationGuard
 	{
 		FCancellationGuard();
@@ -234,10 +233,10 @@ namespace AsyncFlow
 	{
 
 		/**
- * @return the FAsyncFlowState* for the coroutine currently executing on
- *         this thread, or nullptr if no coroutine is running.
- * Game-thread-only. Used by CO_CONTRACT and FCancellationGuard.
- */
+		 * @return the FAsyncFlowState* for the coroutine currently executing on
+		 *         this thread, or nullptr if no coroutine is running.
+		 * Game-thread-only. Used by CO_CONTRACT and FCancellationGuard.
+		 */
 		ASYNCFLOW_API FAsyncFlowState* GetCurrentFlowState();
 
 		/** Set the active flow state. Called by TTask::Resume() around Handle.resume(). */
@@ -279,10 +278,10 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * co_await FSelfCancellation{} inside a coroutine body to cancel
- * and stop immediately. No statements after the co_await execute.
- * The coroutine frame stays suspended; TTask's destructor cleans up.
- */
+	 * co_await FSelfCancellation{} inside a coroutine body to cancel
+	 * and stop immediately. No statements after the co_await execute.
+	 * The coroutine frame stays suspended; TTask's destructor cleans up.
+	 */
 	struct FSelfCancellation
 	{
 	};
@@ -292,11 +291,11 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * co_await FFinishNowIfCanceled{} to check cancellation status.
- * Goes through await_transform -> TContractCheckAwaiter which checks
- * ShouldCancel() first. If cancelled, the coroutine stops at this point.
- * If not cancelled, execution continues immediately (never truly suspends).
- */
+	 * co_await FFinishNowIfCanceled{} to check cancellation status.
+	 * Goes through await_transform -> TContractCheckAwaiter which checks
+	 * ShouldCancel() first. If cancelled, the coroutine stops at this point.
+	 * If not cancelled, execution continues immediately (never truly suspends).
+	 */
 	struct FFinishNowIfCanceled
 	{
 		bool await_ready() const
@@ -477,14 +476,14 @@ namespace AsyncFlow
 	{
 
 		/**
- * Awaiter produced by co_await FSelfCancellation{}.
- * Cancels the flow state, marks the control block as completed, fires OnCompleted,
- * and leaves the coroutine permanently suspended.
- *
- * Clears SelfRef to allow frame destruction if fire-and-forget.
- *
- * @tparam T  The result type of the owning TTask.
- */
+		 * Awaiter produced by co_await FSelfCancellation{}.
+		 * Cancels the flow state, marks the control block as completed, fires OnCompleted,
+		 * and leaves the coroutine permanently suspended.
+		 *
+		 * Clears SelfRef to allow frame destruction if fire-and-forget.
+		 *
+		 * @tparam T  The result type of the owning TTask.
+		 */
 		template <typename T>
 		struct FSelfCancelAwaiter
 		{
@@ -516,12 +515,12 @@ namespace AsyncFlow
 		};
 
 		/**
- * Returned by final_suspend(). Marks the control block as completed and fires
- * OnCompleted from await_suspend (not from the coroutine body).
- *
- * At this point the coroutine is fully suspended, so the callback may
- * safely trigger frame destruction by clearing SelfRef.
- */
+		 * Returned by final_suspend(). Marks the control block as completed and fires
+		 * OnCompleted from await_suspend (not from the coroutine body).
+		 *
+		 * At this point the coroutine is fully suspended, so the callback may
+		 * safely trigger frame destruction by clearing SelfRef.
+		 */
 		struct FFinalAwaiter
 		{
 			bool await_ready() const noexcept
@@ -550,18 +549,18 @@ namespace AsyncFlow
 		};
 
 		/**
- * Wraps every awaiter passed through co_await to inject contract and
- * cancellation checks before suspension.
- *
- * If ShouldCancel() is true at the co_await boundary, the inner awaiter
- * is skipped entirely — await_ready returns true and no suspension occurs.
- *
- * Integrates with CancelableAwaiter concept: if the inner awaiter supports
- * CancelAwaiter(), the cancel function is registered on the control block
- * for expedited cancellation.
- *
- * @tparam InnerAwaiter  The original awaiter type being wrapped.
- */
+		 * Wraps every awaiter passed through co_await to inject contract and
+		 * cancellation checks before suspension.
+		 *
+		 * If ShouldCancel() is true at the co_await boundary, the inner awaiter
+		 * is skipped entirely — await_ready returns true and no suspension occurs.
+		 *
+		 * Integrates with CancelableAwaiter concept: if the inner awaiter supports
+		 * CancelAwaiter(), the cancel function is registered on the control block
+		 * for expedited cancellation.
+		 *
+		 * @tparam InnerAwaiter  The original awaiter type being wrapped.
+		 */
 		template <typename InnerAwaiter>
 		struct TContractCheckAwaiter
 		{
@@ -711,21 +710,21 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Promise type for TTask<T> (non-void). Created automatically by the compiler.
- *
- * Key behaviors:
- * - initial_suspend: always suspends (lazy start).
- * - final_suspend: fires OnCompleted via FFinalAwaiter.
- * - await_transform: wraps every co_await in TContractCheckAwaiter for contract/cancel checks.
- * - Stores the co_return value in the control block's Result (TOptional<T>).
- * - Latent mode detection: if the coroutine function signature includes a
- *   FLatentActionInfo parameter (with or without a UObject* world context),
- *   the compiler selects a constructor overload that captures the latent info
- *   and world context. The task then auto-registers with the engine's latent
- *   action manager on Start(). No explicit helper call is needed.
- *
- * @tparam T  The value type returned by co_return.
- */
+	 * Promise type for TTask<T> (non-void). Created automatically by the compiler.
+	 *
+	 * Key behaviors:
+	 * - initial_suspend: always suspends (lazy start).
+	 * - final_suspend: fires OnCompleted via FFinalAwaiter.
+	 * - await_transform: wraps every co_await in TContractCheckAwaiter for contract/cancel checks.
+	 * - Stores the co_return value in the control block's Result (TOptional<T>).
+	 * - Latent mode detection: if the coroutine function signature includes a
+	 *   FLatentActionInfo parameter (with or without a UObject* world context),
+	 *   the compiler selects a constructor overload that captures the latent info
+	 *   and world context. The task then auto-registers with the engine's latent
+	 *   action manager on Start(). No explicit helper call is needed.
+	 *
+	 * @tparam T  The value type returned by co_return.
+	 */
 	template <typename T>
 	struct TTaskPromise
 	{
@@ -801,17 +800,17 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Wraps every co_await expression to inject contract/cancellation checks.
-	 * Uses a forwarding reference so lvalue awaiters (e.g. non-copyable FAwaitableEvent)
-	 * are stored by reference, while rvalue awaiters are moved by value.
-	 *
-	 * If the awaitable defines operator co_await(), the returned awaiter object is
-	 * used as the inner awaiter. This enables types like FAwaitableEvent to provide
-	 * per-co_await FAwaiter objects that track the handle and support CancelableAwaiter.
-	 *
-	 * @param Awaiter  The awaiter expression from the co_await.
-	 * @return         A TContractCheckAwaiter wrapping the original (or resolved) awaiter.
-	 */
+		 * Wraps every co_await expression to inject contract/cancellation checks.
+		 * Uses a forwarding reference so lvalue awaiters (e.g. non-copyable FAwaitableEvent)
+		 * are stored by reference, while rvalue awaiters are moved by value.
+		 *
+		 * If the awaitable defines operator co_await(), the returned awaiter object is
+		 * used as the inner awaiter. This enables types like FAwaitableEvent to provide
+		 * per-co_await FAwaiter objects that track the handle and support CancelableAwaiter.
+		 *
+		 * @param Awaiter  The awaiter expression from the co_await.
+		 * @return         A TContractCheckAwaiter wrapping the original (or resolved) awaiter.
+		 */
 		template <typename AwaiterType>
 		auto await_transform(AwaiterType&& Awaiter)
 		{
@@ -847,10 +846,10 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Bypass contract/cancellation wrapping for std::suspend_always.
-	 * Used by initial_suspend and internal machinery where checking
-	 * contracts would be premature or cause infinite recursion.
-	 */
+		 * Bypass contract/cancellation wrapping for std::suspend_always.
+		 * Used by initial_suspend and internal machinery where checking
+		 * contracts would be premature or cause infinite recursion.
+		 */
 		std::suspend_always await_transform(std::suspend_always Awaiter)
 		{
 			return Awaiter;
@@ -1187,31 +1186,31 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Lazily-started, copyable, discardable coroutine handle with shared ownership.
- *
- * Internally holds a TSharedPtr to a FCoroutineControlBlock that owns the
- * coroutine frame. Copies of TTask share the same control block, so the
- * type is freely copyable and assignable.
- *
- * The coroutine does not execute until Start() is called (only once).
- * After Start(), the coroutine is self-sustaining — all TTask copies
- * can be destroyed without cancelling the coroutine (fire-and-forget /
- * discardable). Before Start(), destroying the last TTask copy destroys
- * the frame.
- *
- * Dual execution mode:
- *   - Async (default): the coroutine runs via explicit Start() / Resume().
- *   - Latent (auto-detected): when the promise detects a FLatentActionInfo
- *     parameter, Start() also registers with the engine's latent action
- *     manager so the Blueprint output pin fires on completion.
- *
- * Awaitable: another coroutine can co_await a TTask<T> to get its result.
- *
- * Thread safety: all methods are game-thread-only. The co_await interface
- * is also game-thread-only (both coroutines must share the same thread).
- *
- * @tparam T  The value type produced by co_return. Use void for no result.
- */
+	 * Lazily-started, copyable, discardable coroutine handle with shared ownership.
+	 *
+	 * Internally holds a TSharedPtr to a FCoroutineControlBlock that owns the
+	 * coroutine frame. Copies of TTask share the same control block, so the
+	 * type is freely copyable and assignable.
+	 *
+	 * The coroutine does not execute until Start() is called (only once).
+	 * After Start(), the coroutine is self-sustaining — all TTask copies
+	 * can be destroyed without cancelling the coroutine (fire-and-forget /
+	 * discardable). Before Start(), destroying the last TTask copy destroys
+	 * the frame.
+	 *
+	 * Dual execution mode:
+	 *   - Async (default): the coroutine runs via explicit Start() / Resume().
+	 *   - Latent (auto-detected): when the promise detects a FLatentActionInfo
+	 *     parameter, Start() also registers with the engine's latent action
+	 *     manager so the Blueprint output pin fires on completion.
+	 *
+	 * Awaitable: another coroutine can co_await a TTask<T> to get its result.
+	 *
+	 * Thread safety: all methods are game-thread-only. The co_await interface
+	 * is also game-thread-only (both coroutines must share the same thread).
+	 *
+	 * @tparam T  The value type produced by co_return. Use void for no result.
+	 */
 	template <typename T>
 	class TTask
 	{
@@ -1237,9 +1236,9 @@ namespace AsyncFlow
 		~TTask() = default; // Shared ref released automatically
 
 		/**
-	 * Start execution of the coroutine. Only the first call has effect.
-	 * Sets the self-reference for fire-and-forget lifetime.
-	 */
+		 * Start execution of the coroutine. Only the first call has effect.
+		 * Sets the self-reference for fire-and-forget lifetime.
+		 */
 		void Start()
 		{
 			if (CB && !CB->bStarted.exchange(true, std::memory_order_acq_rel))
@@ -1250,10 +1249,10 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Start execution without making the coroutine self-sustaining.
-	 * The caller manages coroutine lifetime via its TTask handle(s).
-	 * Use this in WhenAll/WhenAny/Race where the outer frame owns the tasks.
-	 */
+		 * Start execution without making the coroutine self-sustaining.
+		 * The caller manages coroutine lifetime via its TTask handle(s).
+		 * Use this in WhenAll/WhenAny/Race where the outer frame owns the tasks.
+		 */
 		void StartManaged()
 		{
 			if (CB && !CB->bStarted.exchange(true, std::memory_order_acq_rel))
@@ -1264,13 +1263,13 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Resume the coroutine from its current suspension point.
-	 * On first call via Start(), this begins execution.
-	 *
-	 * Copies the handle to a local before calling resume() — if the coroutine
-	 * completes synchronously and its OnCompleted callback destroys this TTask,
-	 * the local handle keeps the frame alive for the duration of resume().
-	 */
+		 * Resume the coroutine from its current suspension point.
+		 * On first call via Start(), this begins execution.
+		 *
+		 * Copies the handle to a local before calling resume() — if the coroutine
+		 * completes synchronously and its OnCompleted callback destroys this TTask,
+		 * the local handle keeps the frame alive for the duration of resume().
+		 */
 		void Resume()
 		{
 			if (CB && CB->Handle && !CB->Handle.done())
@@ -1288,9 +1287,9 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Request cancellation. Calls CancelAwaiter on the current awaiter
-	 * for expedited cancellation if supported.
-	 */
+		 * Request cancellation. Calls CancelAwaiter on the current awaiter
+		 * for expedited cancellation if supported.
+		 */
 		void Cancel()
 		{
 			if (CB)
@@ -1336,9 +1335,9 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Access the co_return value. Only valid after IsCompleted() returns true.
-	 * @warning Asserts if called before completion.
-	 */
+		 * Access the co_return value. Only valid after IsCompleted() returns true.
+		 * @warning Asserts if called before completion.
+		 */
 		const T& GetResult() const
 		{
 			check(IsCompleted());
@@ -1346,9 +1345,9 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Move the co_return value out. Only valid after IsCompleted() returns true.
-	 * @warning Asserts if called before completion. Leaves Result in a moved-from state.
-	 */
+		 * Move the co_return value out. Only valid after IsCompleted() returns true.
+		 * @warning Asserts if called before completion. Leaves Result in a moved-from state.
+		 */
 		T MoveResult()
 		{
 			check(IsCompleted());
@@ -1356,11 +1355,11 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Register a one-shot callback that fires when the coroutine finishes.
-	 * Only one callback can be registered — registering a second asserts.
-	 *
-	 * @param Callback  Invoked on the game thread when the coroutine completes.
-	 */
+		 * Register a one-shot callback that fires when the coroutine finishes.
+		 * Only one callback can be registered — registering a second asserts.
+		 *
+		 * @param Callback  Invoked on the game thread when the coroutine completes.
+		 */
 		void OnComplete(TFunction<void()> Callback)
 		{
 			if (CB)
@@ -1371,12 +1370,12 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Register a completion callback guarded by a weak UObject reference.
-	 * The callback only fires if WeakObj is still valid at completion time.
-	 *
-	 * @param WeakObj   Weak reference to the UObject whose lifetime gates the callback.
-	 * @param Callback  Invoked only if WeakObj is valid.
-	 */
+		 * Register a completion callback guarded by a weak UObject reference.
+		 * The callback only fires if WeakObj is still valid at completion time.
+		 *
+		 * @param WeakObj   Weak reference to the UObject whose lifetime gates the callback.
+		 * @param Callback  Invoked only if WeakObj is valid.
+		 */
 		void ContinueWithWeak(TWeakObjectPtr<UObject> WeakObj, TFunction<void()> Callback)
 		{
 			OnComplete([WeakObj, Cb = MoveTemp(Callback)]() {
@@ -1388,10 +1387,10 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Register a callback that fires when Cancel() is called.
-	 *
-	 * @param Callback  Invoked on the game thread at cancellation time.
-	 */
+		 * Register a callback that fires when Cancel() is called.
+		 *
+		 * @param Callback  Invoked on the game thread at cancellation time.
+		 */
 		void OnCancelled(TFunction<void()> Callback)
 		{
 			if (CB && CB->FlowState)
@@ -1401,10 +1400,10 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Assign a human-readable name for logging and FAsyncFlowDebugger tracking.
-	 *
-	 * @param Name  Debug label (e.g., "AttackSequence" or "LoadLevel_Forest").
-	 */
+		 * Assign a human-readable name for logging and FAsyncFlowDebugger tracking.
+		 *
+		 * @param Name  Debug label (e.g., "AttackSequence" or "LoadLevel_Forest").
+		 */
 		void SetDebugName(const FString& Name)
 		{
 			if (CB && CB->FlowState)
@@ -1420,9 +1419,9 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * @return the shared flow state. Use for external contract registration
-	 *         or cancellation propagation (e.g., Race() cancels loser tasks).
-	 */
+		 * @return the shared flow state. Use for external contract registration
+		 *         or cancellation propagation (e.g., Race() cancels loser tasks).
+		 */
 		TSharedPtr<FAsyncFlowState> GetFlowState() const
 		{
 			return CB ? CB->FlowState : nullptr;
@@ -1445,13 +1444,13 @@ namespace AsyncFlow
 		// ========================================================================
 
 		/**
-	 * Create a TTask that is already completed with the given value.
-	 * Useful for returning cached results from a function that normally
-	 * returns a coroutine.
-	 *
-	 * @param Value  The result value.
-	 * @return       A started-and-completed TTask holding Value.
-	 */
+		 * Create a TTask that is already completed with the given value.
+		 * Useful for returning cached results from a function that normally
+		 * returns a coroutine.
+		 *
+		 * @param Value  The result value.
+		 * @return       A started-and-completed TTask holding Value.
+		 */
 		static TTask FromResult(T Value)
 		{
 			auto Coro = [](T Val) -> TTask<T> {
@@ -1473,9 +1472,9 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Hook the parent coroutine's continuation so it resumes when this task finishes.
-	 * If the task hasn't started yet, Start() is called here.
-	 */
+		 * Hook the parent coroutine's continuation so it resumes when this task finishes.
+		 * If the task hasn't started yet, Start() is called here.
+		 */
 		void await_suspend(std::coroutine_handle<> Continuation)
 		{
 			if (CB)
@@ -1490,9 +1489,9 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Called when the parent coroutine resumes after co_await.
-	 * Rethrows any captured exception, then returns the result by move.
-	 */
+		 * Called when the parent coroutine resumes after co_await.
+		 * Rethrows any captured exception, then returns the result by move.
+		 */
 		T await_resume()
 		{
 			if (CB && CB->Exception)
@@ -1535,10 +1534,10 @@ namespace AsyncFlow
 		~TTask() = default; // Shared ref released automatically
 
 		/**
-	 * Start execution of the coroutine. Only the first call has effect.
-	 * Sets the self-reference for fire-and-forget lifetime.
-	 * In latent mode, also registers with the engine's latent action manager.
-	 */
+		 * Start execution of the coroutine. Only the first call has effect.
+		 * Sets the self-reference for fire-and-forget lifetime.
+		 * In latent mode, also registers with the engine's latent action manager.
+		 */
 		void Start()
 		{
 			if (CB && !CB->bStarted.exchange(true, std::memory_order_acq_rel))
@@ -1556,10 +1555,10 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Start execution without making the coroutine self-sustaining.
-	 * The caller manages coroutine lifetime via its TTask handle(s).
-	 * Use this in WhenAll/WhenAny/Race where the outer frame owns the tasks.
-	 */
+		 * Start execution without making the coroutine self-sustaining.
+		 * The caller manages coroutine lifetime via its TTask handle(s).
+		 * Use this in WhenAll/WhenAny/Race where the outer frame owns the tasks.
+		 */
 		void StartManaged()
 		{
 			if (CB && !CB->bStarted.exchange(true, std::memory_order_acq_rel))
@@ -1577,13 +1576,13 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Resume the coroutine from its current suspension point.
-	 * On first call via Start(), this begins execution.
-	 *
-	 * Copies the handle to a local before calling resume() — if the coroutine
-	 * completes synchronously and its OnCompleted callback destroys this TTask,
-	 * the local handle keeps the frame alive for the duration of resume().
-	 */
+		 * Resume the coroutine from its current suspension point.
+		 * On first call via Start(), this begins execution.
+		 *
+		 * Copies the handle to a local before calling resume() — if the coroutine
+		 * completes synchronously and its OnCompleted callback destroys this TTask,
+		 * the local handle keeps the frame alive for the duration of resume().
+		 */
 		void Resume()
 		{
 			if (CB && CB->Handle && !CB->Handle.done())
@@ -1601,9 +1600,9 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Request cancellation. Calls CancelAwaiter on the current awaiter
-	 * for expedited cancellation if supported.
-	 */
+		 * Request cancellation. Calls CancelAwaiter on the current awaiter
+		 * for expedited cancellation if supported.
+		 */
 		void Cancel()
 		{
 			if (CB)

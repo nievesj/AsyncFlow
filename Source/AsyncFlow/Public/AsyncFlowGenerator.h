@@ -46,15 +46,15 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Promise type for TGenerator<T>. Manages yielded values and frame lifetime.
- *
- * Yielded lvalues are stored by pointer (zero-copy). Yielded rvalues are
- * moved into StoredValue, and CurrentValue points into that TOptional.
- *
- * co_await is explicitly deleted — generators are synchronous only.
- *
- * @tparam T  The type of each yielded value.
- */
+	 * Promise type for TGenerator<T>. Manages yielded values and frame lifetime.
+	 *
+	 * Yielded lvalues are stored by pointer (zero-copy). Yielded rvalues are
+	 * moved into StoredValue, and CurrentValue points into that TOptional.
+	 *
+	 * co_await is explicitly deleted — generators are synchronous only.
+	 *
+	 * @tparam T  The type of each yielded value.
+	 */
 	template <typename T>
 	struct TGeneratorPromise
 	{
@@ -79,9 +79,9 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Yield an lvalue reference. No copy — CurrentValue points directly at the caller's variable.
-	 * The reference must remain valid until the next MoveNext() call.
-	 */
+		 * Yield an lvalue reference. No copy — CurrentValue points directly at the caller's variable.
+		 * The reference must remain valid until the next MoveNext() call.
+		 */
 		std::suspend_always yield_value(T& Value)
 		{
 			StoredValue.Reset();
@@ -90,9 +90,9 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Yield an rvalue. The value is moved into StoredValue and CurrentValue
-	 * points into the TOptional.
-	 */
+		 * Yield an rvalue. The value is moved into StoredValue and CurrentValue
+		 * points into the TOptional.
+		 */
 		std::suspend_always yield_value(T&& Value)
 		{
 			StoredValue.Emplace(MoveTemp(Value));
@@ -119,23 +119,23 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Lazy O(1)-memory iterator driven by co_yield. Move-only, single-owner.
- *
- * Each call to MoveNext() resumes the coroutine until the next co_yield
- * or until the coroutine body returns. Current() accesses the last yielded value.
- *
- * Supports range-based for via begin()/end(). The iterator calls MoveNext()
- * on construction and on each ++, so the first value is available at *begin().
- *
- * @tparam T  The type of each yielded value.
- *
- * Usage:
- *   TGenerator<int32> CountTo(int32 N)
- *   {
- *       for (int32 I = 0; I < N; ++I) { co_yield I; }
- *   }
- *   for (int32 Val : CountTo(10)) { ... }
- */
+	 * Lazy O(1)-memory iterator driven by co_yield. Move-only, single-owner.
+	 *
+	 * Each call to MoveNext() resumes the coroutine until the next co_yield
+	 * or until the coroutine body returns. Current() accesses the last yielded value.
+	 *
+	 * Supports range-based for via begin()/end(). The iterator calls MoveNext()
+	 * on construction and on each ++, so the first value is available at *begin().
+	 *
+	 * @tparam T  The type of each yielded value.
+	 *
+	 * Usage:
+	 *   TGenerator<int32> CountTo(int32 N)
+	 *   {
+	 *       for (int32 I = 0; I < N; ++I) { co_yield I; }
+	 *   }
+	 *   for (int32 Val : CountTo(10)) { ... }
+	 */
 	template <typename T>
 	class TGenerator
 	{
@@ -184,11 +184,11 @@ namespace AsyncFlow
 		TGenerator& operator=(const TGenerator&) = delete;
 
 		/**
-	 * Advance to the next yielded value.
-	 *
-	 * @return false if the generator is exhausted (coroutine returned).
-	 * @warning Rethrows any exception captured from the coroutine body.
-	 */
+		 * Advance to the next yielded value.
+		 *
+		 * @return false if the generator is exhausted (coroutine returned).
+		 * @warning Rethrows any exception captured from the coroutine body.
+		 */
 		bool MoveNext()
 		{
 			if (!Handle || Handle.done())
@@ -204,9 +204,9 @@ namespace AsyncFlow
 		}
 
 		/**
-	 * Access the current yielded value. Only valid after MoveNext() returns true.
-	 * @warning Undefined behavior if called after MoveNext() returned false.
-	 */
+		 * Access the current yielded value. Only valid after MoveNext() returns true.
+		 * @warning Undefined behavior if called after MoveNext() returned false.
+		 */
 		T& Current()
 		{
 			return *Handle.promise().CurrentValue;
@@ -222,9 +222,9 @@ namespace AsyncFlow
 		// ========================================================================
 
 		/**
-	 * Forward iterator for range-based for. Calls MoveNext() on construction
-	 * and on each operator++. Compares done-state for termination.
-	 */
+		 * Forward iterator for range-based for. Calls MoveNext() on construction
+		 * and on each operator++. Compares done-state for termination.
+		 */
 		struct FIterator
 		{
 			TGenerator* Gen = nullptr;

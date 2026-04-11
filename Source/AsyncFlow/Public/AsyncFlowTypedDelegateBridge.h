@@ -90,5 +90,5 @@ public:
 	TArray<uint8> CapturedParams;
 
 	/** The name of the bound UFUNCTION — used to identify our calls in ProcessEvent. */
-	static inline const FName DelegateFunctionName{TEXT("OnDelegateFired")};
+	static inline const FName DelegateFunctionName{ TEXT("OnDelegateFired") };
 };

@@ -32,32 +32,32 @@ namespace AsyncFlow
 {
 
 	/**
- * FAsyncFlowLatentAction — bridges a TTask<void> coroutine to the engine's
- * FPendingLatentAction system, enabling latent UFUNCTION support.
- *
- * When the coroutine completes or the owning UObject is destroyed, the
- * latent action finishes and the output exec pin fires.
- *
- * Two construction paths:
- * 1. Legacy: Takes a TTask<void> directly (used by StartLatentCoroutine helper).
- * 2. Control block: Takes a TSharedPtr<FCoroutineControlBlock<void>> (used by
- *    auto-detected latent mode in TTask<void>::Start()).
- *
- * Usage in a UFUNCTION (automatic latent detection — Phase 2):
- *   UFUNCTION(BlueprintCallable, meta=(Latent, LatentInfo="LatentInfo"))
- *   TTask<void> MyLatentFunc(UObject* WorldContextObject, FLatentActionInfo LatentInfo)
- *   {
- *       co_await Delay(2.0f);
- *       co_return;
- *   }
- *
- * Usage in a UFUNCTION (explicit helper — Phase 1 legacy):
- *   UFUNCTION(BlueprintCallable, meta=(Latent, LatentInfo="LatentInfo"))
- *   void MyLatentFunc(UObject* WorldContextObject, FLatentActionInfo LatentInfo)
- *   {
- *       AsyncFlow::StartLatentCoroutine(WorldContextObject, LatentInfo, MyCoroutine());
- *   }
- */
+	 * FAsyncFlowLatentAction — bridges a TTask<void> coroutine to the engine's
+	 * FPendingLatentAction system, enabling latent UFUNCTION support.
+	 *
+	 * When the coroutine completes or the owning UObject is destroyed, the
+	 * latent action finishes and the output exec pin fires.
+	 *
+	 * Two construction paths:
+	 * 1. Legacy: Takes a TTask<void> directly (used by StartLatentCoroutine helper).
+	 * 2. Control block: Takes a TSharedPtr<FCoroutineControlBlock<void>> (used by
+	 *    auto-detected latent mode in TTask<void>::Start()).
+	 *
+	 * Usage in a UFUNCTION (automatic latent detection — Phase 2):
+	 *   UFUNCTION(BlueprintCallable, meta=(Latent, LatentInfo="LatentInfo"))
+	 *   TTask<void> MyLatentFunc(UObject* WorldContextObject, FLatentActionInfo LatentInfo)
+	 *   {
+	 *       co_await Delay(2.0f);
+	 *       co_return;
+	 *   }
+	 *
+	 * Usage in a UFUNCTION (explicit helper — Phase 1 legacy):
+	 *   UFUNCTION(BlueprintCallable, meta=(Latent, LatentInfo="LatentInfo"))
+	 *   void MyLatentFunc(UObject* WorldContextObject, FLatentActionInfo LatentInfo)
+	 *   {
+	 *       AsyncFlow::StartLatentCoroutine(WorldContextObject, LatentInfo, MyCoroutine());
+	 *   }
+	 */
 	class FAsyncFlowLatentAction : public FPendingLatentAction
 	{
 	public:
@@ -212,14 +212,14 @@ namespace AsyncFlow
 	};
 
 	/**
- * Helper to start a latent coroutine from a UFUNCTION.
- * Registers the latent action with the engine and starts the coroutine.
- *
- * Returns false if the world or latent action manager is unavailable.
- *
- * @note This is the legacy (Phase 1) API. With Phase 2, coroutine functions
- *       that accept FLatentActionInfo auto-detect latent mode — no helper needed.
- */
+	 * Helper to start a latent coroutine from a UFUNCTION.
+	 * Registers the latent action with the engine and starts the coroutine.
+	 *
+	 * Returns false if the world or latent action manager is unavailable.
+	 *
+	 * @note This is the legacy (Phase 1) API. With Phase 2, coroutine functions
+	 *       that accept FLatentActionInfo auto-detect latent mode — no helper needed.
+	 */
 	inline bool StartLatentCoroutine(UObject* WorldContextObject, const FLatentActionInfo& LatentInfo, TTask<void>&& Task)
 	{
 		if (!WorldContextObject)

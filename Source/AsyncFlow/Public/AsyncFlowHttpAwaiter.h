@@ -46,12 +46,12 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter that sends an HTTP request and waits for the response.
- * Binds OnProcessRequestComplete and resumes with {Response, bSuccess}.
- *
- * Destructor invalidates the alive flag — if the response arrives after
- * the awaiter is dead (e.g., coroutine was cancelled), the callback no-ops.
- */
+	 * Awaiter that sends an HTTP request and waits for the response.
+	 * Binds OnProcessRequestComplete and resumes with {Response, bSuccess}.
+	 *
+	 * Destructor invalidates the alive flag — if the response arrives after
+	 * the awaiter is dead (e.g., coroutine was cancelled), the callback no-ops.
+	 */
 	struct FHttpRequestAwaiter
 	{
 		FHttpRequestRef Request;
@@ -104,12 +104,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Send an HTTP request and co_await the response.
- *
- * @param Request  A configured FHttpRequestRef (verb, URL, headers, body).
- * @return         An awaiter — co_await yields TTuple<FHttpResponsePtr, bool>.
- *                 The bool is true if the connection succeeded.
- */
+	 * Send an HTTP request and co_await the response.
+	 *
+	 * @param Request  A configured FHttpRequestRef (verb, URL, headers, body).
+	 * @return         An awaiter — co_await yields TTuple<FHttpResponsePtr, bool>.
+	 *                 The bool is true if the connection succeeded.
+	 */
 	[[nodiscard]] inline FHttpRequestAwaiter ProcessHttpRequest(FHttpRequestRef Request)
 	{
 		return FHttpRequestAwaiter(MoveTemp(Request));

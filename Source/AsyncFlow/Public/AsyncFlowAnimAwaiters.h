@@ -43,12 +43,12 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter that plays a montage on a UAnimInstance and waits for completion.
- * Binds to both OnMontageEnded and OnMontageBlendingOut delegate pairs.
- * Returns true if the montage completed normally, false if interrupted.
- *
- * If AnimInstance or Montage is null, resumes immediately with false.
- */
+	 * Awaiter that plays a montage on a UAnimInstance and waits for completion.
+	 * Binds to both OnMontageEnded and OnMontageBlendingOut delegate pairs.
+	 * Returns true if the montage completed normally, false if interrupted.
+	 *
+	 * If AnimInstance or Montage is null, resumes immediately with false.
+	 */
 	struct FPlayMontageAndWaitAwaiter
 	{
 		UAnimInstance* AnimInstance = nullptr;
@@ -112,14 +112,14 @@ namespace AsyncFlow
 	};
 
 	/**
- * Play a montage and wait for it to finish.
- *
- * @param AnimInstance   The animation instance to play on.
- * @param Montage        The montage asset.
- * @param PlayRate       Playback speed multiplier. Default 1.0.
- * @param StartSection   Named section to start from. NAME_None starts from the beginning.
- * @return               An awaiter — co_await yields bool (true = completed, false = interrupted).
- */
+	 * Play a montage and wait for it to finish.
+	 *
+	 * @param AnimInstance   The animation instance to play on.
+	 * @param Montage        The montage asset.
+	 * @param PlayRate       Playback speed multiplier. Default 1.0.
+	 * @param StartSection   Named section to start from. NAME_None starts from the beginning.
+	 * @return               An awaiter — co_await yields bool (true = completed, false = interrupted).
+	 */
 	[[nodiscard]] inline FPlayMontageAndWaitAwaiter PlayMontageAndWait(
 		UAnimInstance* AnimInstance,
 		UAnimMontage* Montage,
@@ -134,10 +134,10 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter that waits for a specific montage to finish on a UAnimInstance.
- * Does NOT start playback — the montage must already be playing.
- * If no matching montage is active, resumes immediately.
- */
+	 * Awaiter that waits for a specific montage to finish on a UAnimInstance.
+	 * Does NOT start playback — the montage must already be playing.
+	 * If no matching montage is active, resumes immediately.
+	 */
 	struct FWaitForMontageEndedAwaiter
 	{
 		UAnimInstance* AnimInstance = nullptr;
@@ -191,12 +191,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Wait for an already-playing montage to finish.
- *
- * @param AnimInstance  The animation instance.
- * @param Montage       The montage to wait on. Must already be playing.
- * @return              An awaiter — co_await yields void. Resumes when the montage stops playing or the instance is invalidated.
- */
+	 * Wait for an already-playing montage to finish.
+	 *
+	 * @param AnimInstance  The animation instance.
+	 * @param Montage       The montage to wait on. Must already be playing.
+	 * @return              An awaiter — co_await yields void. Resumes when the montage stops playing or the instance is invalidated.
+	 */
 	[[nodiscard]] inline FWaitForMontageEndedAwaiter WaitForMontageEnded(UAnimInstance* AnimInstance, UAnimMontage* Montage)
 	{
 		return FWaitForMontageEndedAwaiter{ AnimInstance, Montage };

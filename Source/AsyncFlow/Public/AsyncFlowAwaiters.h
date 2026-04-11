@@ -56,15 +56,15 @@ namespace AsyncFlow
 	{
 
 		/**
- * RAII flag shared between an awaiter and its tick-subsystem entry.
- *
- * When the awaiter is destroyed (coroutine frame teardown), *Flag is set
- * to false. The subsystem reads it before calling Handle.resume() — if
- * false, the pending entry is discarded instead of resuming a dead frame.
- *
- * Created lazily on first call to Get(). Null means "no tracking" (legacy path).
- * Move-only because the flag ownership must be unique.
- */
+		 * RAII flag shared between an awaiter and its tick-subsystem entry.
+		 *
+		 * When the awaiter is destroyed (coroutine frame teardown), *Flag is set
+		 * to false. The subsystem reads it before calling Handle.resume() — if
+		 * false, the pending entry is discarded instead of resuming a dead frame.
+		 *
+		 * Created lazily on first call to Get(). Null means "no tracking" (legacy path).
+		 * Move-only because the flag ownership must be unique.
+		 */
 		struct FAwaiterAliveFlag
 		{
 			mutable TSharedPtr<bool> Flag;
@@ -101,9 +101,9 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter struct for game-time delays. Respects global time dilation and pause.
- * Resumes immediately if Seconds <= 0 or the world context is null.
- */
+	 * Awaiter struct for game-time delays. Respects global time dilation and pause.
+	 * Resumes immediately if Seconds <= 0 or the world context is null.
+	 */
 	struct FDelayAwaiter
 	{
 		TWeakObjectPtr<UObject> WorldContext;
@@ -146,7 +146,8 @@ namespace AsyncFlow
 						UObject* Ctx = WeakCtx.Get();
 						return !Ctx || !Ctx->GetWorld() || Ctx->GetWorld()->GetTimeSeconds() >= TargetTime;
 					},
-					Handle, AliveFlag.Get());
+					Handle,
+					AliveFlag.Get());
 				return;
 			}
 
@@ -184,12 +185,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Suspend for Seconds of dilated game time.
- *
- * @param Seconds      Duration in game-dilated seconds. Values <= 0 resume immediately.
- * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
- * @return             An awaiter — use with co_await.
- */
+	 * Suspend for Seconds of dilated game time.
+	 *
+	 * @param Seconds      Duration in game-dilated seconds. Values <= 0 resume immediately.
+	 * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
+	 * @return             An awaiter — use with co_await.
+	 */
 	[[nodiscard]] inline FDelayAwaiter Delay(float Seconds, UObject* WorldContext = nullptr)
 	{
 		FDelayAwaiter Aw;
@@ -209,9 +210,9 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter struct for wall-clock delays. Ignores pause and time dilation.
- * Useful for UI animations or meta-game timers that should not freeze with the game.
- */
+	 * Awaiter struct for wall-clock delays. Ignores pause and time dilation.
+	 * Useful for UI animations or meta-game timers that should not freeze with the game.
+	 */
 	struct FRealDelayAwaiter
 	{
 		TWeakObjectPtr<UObject> WorldContext;
@@ -254,7 +255,8 @@ namespace AsyncFlow
 						UObject* Ctx = WeakCtx.Get();
 						return !Ctx || !Ctx->GetWorld() || Ctx->GetWorld()->GetRealTimeSeconds() >= TargetTime;
 					},
-					Handle, AliveFlag.Get());
+					Handle,
+					AliveFlag.Get());
 				return;
 			}
 
@@ -292,12 +294,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Suspend for Seconds of real wall-clock time. Ignores pause and dilation.
- *
- * @param Seconds      Duration in real seconds.
- * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
- * @return             An awaiter — use with co_await.
- */
+	 * Suspend for Seconds of real wall-clock time. Ignores pause and dilation.
+	 *
+	 * @param Seconds      Duration in real seconds.
+	 * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
+	 * @return             An awaiter — use with co_await.
+	 */
 	[[nodiscard]] inline FRealDelayAwaiter RealDelay(float Seconds, UObject* WorldContext = nullptr)
 	{
 		FRealDelayAwaiter Aw;
@@ -317,9 +319,9 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter struct that yields for exactly one tick. Always suspends
- * (await_ready returns false). Equivalent to Ticks(WorldContext, 1).
- */
+	 * Awaiter struct that yields for exactly one tick. Always suspends
+	 * (await_ready returns false). Equivalent to Ticks(WorldContext, 1).
+	 */
 	struct FNextTickAwaiter
 	{
 		TWeakObjectPtr<UObject> WorldContext;
@@ -355,7 +357,8 @@ namespace AsyncFlow
 				StoredHandle = Handle;
 				LatentAction->SetCondition(
 					[]() -> bool { return true; },
-					Handle, AliveFlag.Get());
+					Handle,
+					AliveFlag.Get());
 				return;
 			}
 
@@ -393,11 +396,11 @@ namespace AsyncFlow
 	};
 
 	/**
- * Suspend until the next game tick.
- *
- * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
- * @return             An awaiter — use with co_await.
- */
+	 * Suspend until the next game tick.
+	 *
+	 * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
+	 * @return             An awaiter — use with co_await.
+	 */
 	[[nodiscard]] inline FNextTickAwaiter NextTick(UObject* WorldContext = nullptr)
 	{
 		FNextTickAwaiter Aw;
@@ -410,9 +413,9 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter struct that yields for a specified number of ticks.
- * Resumes immediately if NumTicks <= 0.
- */
+	 * Awaiter struct that yields for a specified number of ticks.
+	 * Resumes immediately if NumTicks <= 0.
+	 */
 	struct FTicksAwaiter
 	{
 		TWeakObjectPtr<UObject> WorldContext;
@@ -450,7 +453,8 @@ namespace AsyncFlow
 				auto Counter = MakeShared<int32>(NumTicks);
 				LatentAction->SetCondition(
 					[Counter]() -> bool { return --(*Counter) <= 0; },
-					Handle, AliveFlag.Get());
+					Handle,
+					AliveFlag.Get());
 				return;
 			}
 
@@ -488,12 +492,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Suspend for InNumTicks game ticks.
- *
- * @param InNumTicks   Number of ticks to wait. Clamped to at least 1 in the subsystem.
- * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
- * @return             An awaiter — use with co_await.
- */
+	 * Suspend for InNumTicks game ticks.
+	 *
+	 * @param InNumTicks   Number of ticks to wait. Clamped to at least 1 in the subsystem.
+	 * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
+	 * @return             An awaiter — use with co_await.
+	 */
 	[[nodiscard]] inline FTicksAwaiter Ticks(int32 InNumTicks, UObject* WorldContext = nullptr)
 	{
 		FTicksAwaiter Aw;
@@ -513,13 +517,13 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter struct that checks a predicate every tick and resumes
- * the coroutine when the predicate returns true. If the predicate
- * is already true at the point of co_await, no suspension occurs.
- *
- * The Context UObject is held via TWeakObjectPtr — if it is GC'd,
- * the condition entry is silently removed from the subsystem.
- */
+	 * Awaiter struct that checks a predicate every tick and resumes
+	 * the coroutine when the predicate returns true. If the predicate
+	 * is already true at the point of co_await, no suspension occurs.
+	 *
+	 * The Context UObject is held via TWeakObjectPtr — if it is GC'd,
+	 * the condition entry is silently removed from the subsystem.
+	 */
 	struct FConditionAwaiter
 	{
 		TWeakObjectPtr<UObject> Context;
@@ -557,7 +561,8 @@ namespace AsyncFlow
 				auto Pred = Predicate;
 				LatentAction->SetCondition(
 					[Pred]() -> bool { return Pred(); },
-					Handle, AliveFlag.Get());
+					Handle,
+					AliveFlag.Get());
 				return;
 			}
 
@@ -595,12 +600,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Suspend until InPredicate returns true. Evaluated once per tick.
- *
- * @param InPredicate  Callable returning bool. Must be safe to call from the game thread.
- * @param InContext     UObject for world access and lifetime tracking. Optional in latent mode.
- * @return             An awaiter — use with co_await.
- */
+	 * Suspend until InPredicate returns true. Evaluated once per tick.
+	 *
+	 * @param InPredicate  Callable returning bool. Must be safe to call from the game thread.
+	 * @param InContext     UObject for world access and lifetime tracking. Optional in latent mode.
+	 * @return             An awaiter — use with co_await.
+	 */
 	[[nodiscard]] inline FConditionAwaiter WaitForCondition(TFunction<bool()> InPredicate, UObject* InContext = nullptr)
 	{
 		FConditionAwaiter Aw;
@@ -623,10 +628,10 @@ namespace AsyncFlow
 	{
 
 		/**
- * Shared state for WhenAll. Tracks remaining task count and the
- * parent coroutine's continuation handle. When Remaining hits 0,
- * the continuation is resumed.
- */
+		 * Shared state for WhenAll. Tracks remaining task count and the
+		 * parent coroutine's continuation handle. When Remaining hits 0,
+		 * the continuation is resumed.
+		 */
 		struct FWhenAllState
 		{
 			std::atomic<int32> Remaining;
@@ -643,9 +648,9 @@ namespace AsyncFlow
 	} // namespace Private
 
 	/**
- * Awaiter struct for WhenAll. Suspends until all tracked tasks complete.
- * If all tasks are already done, await_ready returns true.
- */
+	 * Awaiter struct for WhenAll. Suspends until all tracked tasks complete.
+	 * If all tasks are already done, await_ready returns true.
+	 */
 	struct FWhenAllAwaiter
 	{
 		TSharedPtr<Private::FWhenAllState> State;
@@ -689,14 +694,14 @@ namespace AsyncFlow
 	};
 
 	/**
- * Wait until all provided tasks complete. Each task is Start()-ed automatically.
- *
- * @param Tasks  Variadic pack of TTask references.
- * @return       An awaiter — use with co_await.
- *
- * @warning Each task's OnComplete slot is consumed. Do not register
- *          your own OnComplete before passing tasks to WhenAll.
- */
+	 * Wait until all provided tasks complete. Each task is Start()-ed automatically.
+	 *
+	 * @param Tasks  Variadic pack of TTask references.
+	 * @return       An awaiter — use with co_await.
+	 *
+	 * @warning Each task's OnComplete slot is consumed. Do not register
+	 *          your own OnComplete before passing tasks to WhenAll.
+	 */
 	template <typename... TaskTypes>
 	[[nodiscard]] FWhenAllAwaiter WhenAll(TaskTypes&... Tasks)
 	{
@@ -738,9 +743,9 @@ namespace AsyncFlow
 	{
 
 		/**
- * Shared state for WhenAny and Race. Tracks which task completed first
- * via an atomic compare-exchange on bTriggered/WinnerIndex.
- */
+		 * Shared state for WhenAny and Race. Tracks which task completed first
+		 * via an atomic compare-exchange on bTriggered/WinnerIndex.
+		 */
 		struct FWhenAnyState
 		{
 			std::atomic<bool> bTriggered{ false };
@@ -752,9 +757,9 @@ namespace AsyncFlow
 	} // namespace Private
 
 	/**
- * Awaiter struct for WhenAny. Suspends until one task completes.
- * await_resume() returns the 0-based index of the winner.
- */
+	 * Awaiter struct for WhenAny. Suspends until one task completes.
+	 * await_resume() returns the 0-based index of the winner.
+	 */
 	struct FWhenAnyAwaiter
 	{
 		TSharedPtr<Private::FWhenAnyState> State;
@@ -798,13 +803,13 @@ namespace AsyncFlow
 	};
 
 	/**
- * Wait until any one of the provided tasks completes. Tasks are Start()-ed automatically.
- *
- * @param Tasks  Variadic pack of TTask references.
- * @return       An awaiter — co_await yields the 0-based index of the first task to finish.
- *
- * @warning Non-winning tasks continue running. Use Race() to auto-cancel losers.
- */
+	 * Wait until any one of the provided tasks completes. Tasks are Start()-ed automatically.
+	 *
+	 * @param Tasks  Variadic pack of TTask references.
+	 * @return       An awaiter — co_await yields the 0-based index of the first task to finish.
+	 *
+	 * @warning Non-winning tasks continue running. Use Race() to auto-cancel losers.
+	 */
 	template <typename... TaskTypes>
 	[[nodiscard]] FWhenAnyAwaiter WhenAny(TaskTypes&... Tasks)
 	{
@@ -845,9 +850,9 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter struct for Race. Same as WhenAny but auto-cancels all
- * non-winning tasks when the first one completes.
- */
+	 * Awaiter struct for Race. Same as WhenAny but auto-cancels all
+	 * non-winning tasks when the first one completes.
+	 */
 	struct FRaceAwaiter
 	{
 		TSharedPtr<Private::FWhenAnyState> State;
@@ -904,12 +909,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Race: first task to complete wins; all losers are cancelled.
- * Tasks are Start()-ed automatically.
- *
- * @param Tasks  Variadic pack of TTask references.
- * @return       An awaiter — co_await yields the 0-based index of the winner.
- */
+	 * Race: first task to complete wins; all losers are cancelled.
+	 * Tasks are Start()-ed automatically.
+	 *
+	 * @param Tasks  Variadic pack of TTask references.
+	 * @return       An awaiter — co_await yields the 0-based index of the winner.
+	 */
 	template <typename... TaskTypes>
 	[[nodiscard]] FRaceAwaiter Race(TaskTypes&... Tasks)
 	{
@@ -959,12 +964,12 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Wait until all tasks in the array complete. Tasks are Start()-ed automatically.
- * Null entries in the array are counted as immediately complete.
- *
- * @param Tasks  Array of pointers to TTask<void>. Null entries are skipped.
- * @return       An awaiter — use with co_await.
- */
+	 * Wait until all tasks in the array complete. Tasks are Start()-ed automatically.
+	 * Null entries in the array are counted as immediately complete.
+	 *
+	 * @param Tasks  Array of pointers to TTask<void>. Null entries are skipped.
+	 * @return       An awaiter — use with co_await.
+	 */
 	[[nodiscard]] inline FWhenAllAwaiter WhenAll(TArray<TTask<void>*>& Tasks)
 	{
 		const int32 Count = Tasks.Num();
@@ -1016,11 +1021,11 @@ namespace AsyncFlow
 	}
 
 	/**
- * Wait until any task in the array completes.
- *
- * @param Tasks  Array of pointers to TTask<void>. Null entries are skipped.
- * @return       An awaiter — co_await yields the 0-based winner index.
- */
+	 * Wait until any task in the array completes.
+	 *
+	 * @param Tasks  Array of pointers to TTask<void>. Null entries are skipped.
+	 * @return       An awaiter — co_await yields the 0-based winner index.
+	 */
 	[[nodiscard]] inline FWhenAnyAwaiter WhenAny(TArray<TTask<void>*>& Tasks)
 	{
 		TSharedPtr<Private::FWhenAnyState> State = MakeShared<Private::FWhenAnyState>();
@@ -1060,11 +1065,11 @@ namespace AsyncFlow
 	}
 
 	/**
- * Race with a TArray. First to complete wins; all others cancelled.
- *
- * @param Tasks  Array of pointers to TTask<void>. Null entries get a no-op cancel function.
- * @return       An awaiter — co_await yields the 0-based winner index.
- */
+	 * Race with a TArray. First to complete wins; all others cancelled.
+	 *
+	 * @param Tasks  Array of pointers to TTask<void>. Null entries get a no-op cancel function.
+	 * @return       An awaiter — co_await yields the 0-based winner index.
+	 */
 	[[nodiscard]] inline FRaceAwaiter Race(TArray<TTask<void>*>& Tasks)
 	{
 		TSharedPtr<Private::FWhenAnyState> State = MakeShared<Private::FWhenAnyState>();
@@ -1363,9 +1368,9 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter struct for unpaused-time delays. Ticks even while the game is paused.
- * Uses UWorld::GetUnpausedTimeSeconds() as its time source.
- */
+	 * Awaiter struct for unpaused-time delays. Ticks even while the game is paused.
+	 * Uses UWorld::GetUnpausedTimeSeconds() as its time source.
+	 */
 	struct FUnpausedDelayAwaiter
 	{
 		TWeakObjectPtr<UObject> WorldContext;
@@ -1408,7 +1413,8 @@ namespace AsyncFlow
 						UObject* Ctx = WeakCtx.Get();
 						return !Ctx || !Ctx->GetWorld() || Ctx->GetWorld()->GetUnpausedTimeSeconds() >= TargetTime;
 					},
-					Handle, AliveFlag.Get());
+					Handle,
+					AliveFlag.Get());
 				return;
 			}
 
@@ -1446,12 +1452,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Suspend for Seconds using unpaused time (ticks during pause).
- *
- * @param Seconds      Duration in unpaused seconds.
- * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
- * @return             An awaiter — use with co_await.
- */
+	 * Suspend for Seconds using unpaused time (ticks during pause).
+	 *
+	 * @param Seconds      Duration in unpaused seconds.
+	 * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
+	 * @return             An awaiter — use with co_await.
+	 */
 	[[nodiscard]] inline FUnpausedDelayAwaiter UnpausedDelay(float Seconds, UObject* WorldContext = nullptr)
 	{
 		FUnpausedDelayAwaiter Aw;
@@ -1471,9 +1477,9 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter struct for audio-time delays. Uses UWorld::GetAudioTimeSeconds().
- * Audio time may drift from game time depending on engine audio settings.
- */
+	 * Awaiter struct for audio-time delays. Uses UWorld::GetAudioTimeSeconds().
+	 * Audio time may drift from game time depending on engine audio settings.
+	 */
 	struct FAudioDelayAwaiter
 	{
 		TWeakObjectPtr<UObject> WorldContext;
@@ -1516,7 +1522,8 @@ namespace AsyncFlow
 						UObject* Ctx = WeakCtx.Get();
 						return !Ctx || !Ctx->GetWorld() || Ctx->GetWorld()->GetAudioTimeSeconds() >= TargetTime;
 					},
-					Handle, AliveFlag.Get());
+					Handle,
+					AliveFlag.Get());
 				return;
 			}
 
@@ -1554,12 +1561,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Suspend for Seconds using audio time.
- *
- * @param Seconds      Duration in audio-clock seconds.
- * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
- * @return             An awaiter — use with co_await.
- */
+	 * Suspend for Seconds using audio time.
+	 *
+	 * @param Seconds      Duration in audio-clock seconds.
+	 * @param WorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
+	 * @return             An awaiter — use with co_await.
+	 */
 	[[nodiscard]] inline FAudioDelayAwaiter AudioDelay(float Seconds, UObject* WorldContext = nullptr)
 	{
 		FAudioDelayAwaiter Aw;
@@ -1600,7 +1607,8 @@ namespace AsyncFlow
 		bool await_ready() const
 		{
 			UObject* Ctx = WorldContext.Get();
-			if (!Ctx || !Ctx->GetWorld()) return true;
+			if (!Ctx || !Ctx->GetWorld())
+				return true;
 			return Ctx->GetWorld()->GetTimeSeconds() >= TargetTime;
 		}
 
@@ -1625,7 +1633,8 @@ namespace AsyncFlow
 						UObject* Ctx = WeakCtx.Get();
 						return !Ctx || !Ctx->GetWorld() || Ctx->GetWorld()->GetTimeSeconds() >= Target;
 					},
-					Handle, AliveFlag.Get());
+					Handle,
+					AliveFlag.Get());
 				return;
 			}
 
@@ -1657,7 +1666,9 @@ namespace AsyncFlow
 			}
 		}
 
-		void await_resume() const {}
+		void await_resume() const
+		{
+		}
 	};
 
 	/**
@@ -1717,7 +1728,8 @@ namespace AsyncFlow
 				const double Target = TargetTime;
 				LatentAction->SetCondition(
 					[Target]() -> bool { return FPlatformTime::Seconds() >= Target; },
-					Handle, AliveFlag.Get());
+					Handle,
+					AliveFlag.Get());
 				return;
 			}
 
@@ -1749,7 +1761,9 @@ namespace AsyncFlow
 			}
 		}
 
-		void await_resume() const {}
+		void await_resume() const
+		{
+		}
 	};
 
 	/**
@@ -1790,7 +1804,8 @@ namespace AsyncFlow
 		bool await_ready() const
 		{
 			UObject* Ctx = WorldContext.Get();
-			if (!Ctx || !Ctx->GetWorld()) return true;
+			if (!Ctx || !Ctx->GetWorld())
+				return true;
 			return Ctx->GetWorld()->GetUnpausedTimeSeconds() >= TargetTime;
 		}
 
@@ -1815,7 +1830,8 @@ namespace AsyncFlow
 						UObject* Ctx = WeakCtx.Get();
 						return !Ctx || !Ctx->GetWorld() || Ctx->GetWorld()->GetUnpausedTimeSeconds() >= Target;
 					},
-					Handle, AliveFlag.Get());
+					Handle,
+					AliveFlag.Get());
 				return;
 			}
 
@@ -1847,7 +1863,9 @@ namespace AsyncFlow
 			}
 		}
 
-		void await_resume() const {}
+		void await_resume() const
+		{
+		}
 	};
 
 	/**
@@ -1888,7 +1906,8 @@ namespace AsyncFlow
 		bool await_ready() const
 		{
 			UObject* Ctx = WorldContext.Get();
-			if (!Ctx || !Ctx->GetWorld()) return true;
+			if (!Ctx || !Ctx->GetWorld())
+				return true;
 			return Ctx->GetWorld()->GetAudioTimeSeconds() >= TargetTime;
 		}
 
@@ -1913,7 +1932,8 @@ namespace AsyncFlow
 						UObject* Ctx = WeakCtx.Get();
 						return !Ctx || !Ctx->GetWorld() || Ctx->GetWorld()->GetAudioTimeSeconds() >= Target;
 					},
-					Handle, AliveFlag.Get());
+					Handle,
+					AliveFlag.Get());
 				return;
 			}
 
@@ -1945,7 +1965,9 @@ namespace AsyncFlow
 			}
 		}
 
-		void await_resume() const {}
+		void await_resume() const
+		{
+		}
 	};
 
 	/**
@@ -1966,12 +1988,12 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter struct for actor-dilated delays. The delay is scaled by the
- * actor's CustomTimeDilation each tick: a dilation of 2.0 halves the
- * real wait time, 0.5 doubles it.
- *
- * If the actor is destroyed mid-wait, the entry is discarded.
- */
+	 * Awaiter struct for actor-dilated delays. The delay is scaled by the
+	 * actor's CustomTimeDilation each tick: a dilation of 2.0 halves the
+	 * real wait time, 0.5 doubles it.
+	 *
+	 * If the actor is destroyed mid-wait, the entry is discarded.
+	 */
 	struct FActorDilatedDelayAwaiter
 	{
 		TWeakObjectPtr<AActor> Actor;
@@ -2034,12 +2056,12 @@ namespace AsyncFlow
 	};
 
 	/**
- * Suspend for Seconds scaled by an actor's CustomTimeDilation.
- *
- * @param InActor  The actor whose CustomTimeDilation scales the delay.
- * @param Seconds  Base duration before dilation is applied.
- * @return         An awaiter — use with co_await.
- */
+	 * Suspend for Seconds scaled by an actor's CustomTimeDilation.
+	 *
+	 * @param InActor  The actor whose CustomTimeDilation scales the delay.
+	 * @param Seconds  Base duration before dilation is applied.
+	 * @return         An awaiter — use with co_await.
+	 */
 	[[nodiscard]] inline FActorDilatedDelayAwaiter SecondsForActor(AActor* InActor, float Seconds)
 	{
 		FActorDilatedDelayAwaiter Aw;
@@ -2053,21 +2075,21 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Awaiter for time-sliced loop processing. Checks wall-clock time at each
- * co_await point: if the elapsed time since the tick started is still within
- * the budget, await_ready returns true and no suspension occurs. When the
- * budget runs out, the coroutine yields to the next tick.
- *
- * Use this inside tight loops that process large datasets to avoid frame spikes.
- *
- * Usage:
- *   auto Budget = AsyncFlow::FTickTimeBudget::Milliseconds(WorldContext, 2.0);
- *   for (auto& Item : BigArray)
- *   {
- *       ProcessItem(Item);
- *       co_await Budget;
- *   }
- */
+	 * Awaiter for time-sliced loop processing. Checks wall-clock time at each
+	 * co_await point: if the elapsed time since the tick started is still within
+	 * the budget, await_ready returns true and no suspension occurs. When the
+	 * budget runs out, the coroutine yields to the next tick.
+	 *
+	 * Use this inside tight loops that process large datasets to avoid frame spikes.
+	 *
+	 * Usage:
+	 *   auto Budget = AsyncFlow::FTickTimeBudget::Milliseconds(WorldContext, 2.0);
+	 *   for (auto& Item : BigArray)
+	 *   {
+	 *       ProcessItem(Item);
+	 *       co_await Budget;
+	 *   }
+	 */
 	struct FTickTimeBudget
 	{
 		/** World context for accessing the tick subsystem when yielding. */
@@ -2091,12 +2113,12 @@ namespace AsyncFlow
 		FTickTimeBudget& operator=(const FTickTimeBudget&) = delete;
 
 		/**
-	 * Create a budget with a millisecond limit.
-	 *
-	 * @param Ms             Budget in milliseconds per tick (e.g. 2.0 = 2ms).
-	 * @param InWorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
-	 * @return               A configured FTickTimeBudget awaiter.
-	 */
+		 * Create a budget with a millisecond limit.
+		 *
+		 * @param Ms             Budget in milliseconds per tick (e.g. 2.0 = 2ms).
+		 * @param InWorldContext  Any UObject with a valid GetWorld(). Optional in latent mode.
+		 * @return               A configured FTickTimeBudget awaiter.
+		 */
 		static FTickTimeBudget Milliseconds(double Ms, UObject* InWorldContext = nullptr)
 		{
 			FTickTimeBudget Budget;

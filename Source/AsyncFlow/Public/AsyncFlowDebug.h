@@ -67,13 +67,13 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Process-wide singleton that tracks active coroutines for debugging.
- *
- * Thread-safe: all methods lock an internal FCriticalSection.
- * ID is typically the coroutine handle address cast to uint64.
- *
- * Console command: "AsyncFlow.List" calls DumpToLog().
- */
+	 * Process-wide singleton that tracks active coroutines for debugging.
+	 *
+	 * Thread-safe: all methods lock an internal FCriticalSection.
+	 * ID is typically the coroutine handle address cast to uint64.
+	 *
+	 * Console command: "AsyncFlow.List" calls DumpToLog().
+	 */
 	class ASYNCFLOW_API FAsyncFlowDebugger
 	{
 	public:
@@ -81,18 +81,18 @@ namespace AsyncFlow
 		static FAsyncFlowDebugger& Get();
 
 		/**
-	 * Register a coroutine for tracking.
-	 *
-	 * @param Id         Unique identifier (typically handle address).
-	 * @param DebugName  Human-readable label for log output.
-	 */
+		 * Register a coroutine for tracking.
+		 *
+		 * @param Id         Unique identifier (typically handle address).
+		 * @param DebugName  Human-readable label for log output.
+		 */
 		void Register(uint64 Id, const FString& DebugName);
 
 		/**
-	 * Remove a coroutine from tracking.
-	 *
-	 * @param Id  The same ID passed to Register().
-	 */
+		 * Remove a coroutine from tracking.
+		 *
+		 * @param Id  The same ID passed to Register().
+		 */
 		void Unregister(uint64 Id);
 
 		/** @return a snapshot copy of all currently tracked coroutines. Thread-safe. */
@@ -116,12 +116,12 @@ namespace AsyncFlow
 	// ============================================================================
 
 	/**
- * Register a TTask for debug tracking. Call after SetDebugName().
- * Uses the coroutine handle address as the tracking ID.
- *
- * @tparam T     The task's result type.
- * @param Task   The task to register. Must be valid (IsValid() == true).
- */
+	 * Register a TTask for debug tracking. Call after SetDebugName().
+	 * Uses the coroutine handle address as the tracking ID.
+	 *
+	 * @tparam T     The task's result type.
+	 * @param Task   The task to register. Must be valid (IsValid() == true).
+	 */
 	template <typename T>
 	void DebugRegisterTask(TTask<T>& Task)
 	{
@@ -133,11 +133,11 @@ namespace AsyncFlow
 	}
 
 	/**
- * Unregister a TTask from debug tracking.
- *
- * @tparam T     The task's result type.
- * @param Task   The task to unregister. Must be valid.
- */
+	 * Unregister a TTask from debug tracking.
+	 *
+	 * @tparam T     The task's result type.
+	 * @param Task   The task to unregister. Must be valid.
+	 */
 	template <typename T>
 	void DebugUnregisterTask(TTask<T>& Task)
 	{

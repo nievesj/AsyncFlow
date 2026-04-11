@@ -33,15 +33,15 @@ namespace AsyncFlow
 {
 
 	/**
- * Start an editor-context coroutine task with optional debug tracking.
- *
- * Calls Task.Start() and, if DebugName is non-empty, registers the task
- * with FAsyncFlowDebugger for visibility in AsyncFlow.List / AsyncFlow.EditorList.
- *
- * @tparam T          The task's result type.
- * @param Task        The task to start. Must be valid (not yet started).
- * @param DebugName   Optional human-readable name for debug tracking.
- */
+	 * Start an editor-context coroutine task with optional debug tracking.
+	 *
+	 * Calls Task.Start() and, if DebugName is non-empty, registers the task
+	 * with FAsyncFlowDebugger for visibility in AsyncFlow.List / AsyncFlow.EditorList.
+	 *
+	 * @tparam T          The task's result type.
+	 * @param Task        The task to start. Must be valid (not yet started).
+	 * @param DebugName   Optional human-readable name for debug tracking.
+	 */
 	template <typename T>
 	void StartEditorTask(TTask<T>& Task, const FString& DebugName = TEXT(""))
 	{
