@@ -80,7 +80,9 @@ class UWorld;
 
 #include <coroutine>
 #include <atomic>
+#if !PLATFORM_EXCEPTIONS_DISABLED
 #include <exception>
+#endif
 #include <concepts>
 
 #if __has_include("Tasks/Task.h")
@@ -376,7 +378,11 @@ namespace AsyncFlow
 		std::coroutine_handle<TTaskPromise<T>> Handle;
 		TSharedPtr<FAsyncFlowState> FlowState;
 		TOptional<T> Result;
+#if !PLATFORM_EXCEPTIONS_DISABLED
 		std::exception_ptr Exception;
+#else
+		bool bHasException = false;
+#endif
 		std::atomic<bool> bCompleted{ false };
 		std::atomic<bool> bStarted{ false };
 		TFunction<void()> OnCompleted;
@@ -409,7 +415,11 @@ namespace AsyncFlow
 		std::coroutine_handle<TTaskPromise<void>> Handle;
 		TSharedPtr<FAsyncFlowState> FlowState;
 		bool bHasReturned = false;
+#if !PLATFORM_EXCEPTIONS_DISABLED
 		std::exception_ptr Exception;
+#else
+		bool bHasException = false;
+#endif
 		std::atomic<bool> bCompleted{ false };
 		std::atomic<bool> bStarted{ false };
 		TFunction<void()> OnCompleted;
@@ -792,11 +802,20 @@ namespace AsyncFlow
 
 		void unhandled_exception()
 		{
+#if !PLATFORM_EXCEPTIONS_DISABLED
 			if (CB)
 			{
 				CB->Exception = std::current_exception();
 			}
 			UE_LOG(LogAsyncFlow, Error, TEXT("Unhandled exception in AsyncFlow coroutine [%s]"), *FlowState->DebugName);
+#else
+			if (CB)
+			{
+				CB->bHasException = true;
+			}
+			ensureMsgf(false, TEXT("Unhandled exception in AsyncFlow coroutine [%s]"), *FlowState->DebugName);
+			UE_LOG(LogAsyncFlow, Error, TEXT("Unhandled exception in AsyncFlow coroutine [%s] — exceptions disabled, bHasException set"), *FlowState->DebugName);
+#endif
 		}
 
 		/**
@@ -1032,11 +1051,20 @@ namespace AsyncFlow
 
 		void unhandled_exception()
 		{
+#if !PLATFORM_EXCEPTIONS_DISABLED
 			if (CB)
 			{
 				CB->Exception = std::current_exception();
 			}
 			UE_LOG(LogAsyncFlow, Error, TEXT("Unhandled exception in AsyncFlow coroutine [%s]"), *FlowState->DebugName);
+#else
+			if (CB)
+			{
+				CB->bHasException = true;
+			}
+			ensureMsgf(false, TEXT("Unhandled exception in AsyncFlow coroutine [%s]"), *FlowState->DebugName);
+			UE_LOG(LogAsyncFlow, Error, TEXT("Unhandled exception in AsyncFlow coroutine [%s] — exceptions disabled, bHasException set"), *FlowState->DebugName);
+#endif
 		}
 
 		template <typename AwaiterType>
@@ -1494,10 +1522,19 @@ namespace AsyncFlow
 		 */
 		T await_resume()
 		{
+#if !PLATFORM_EXCEPTIONS_DISABLED
 			if (CB && CB->Exception)
 			{
 				std::rethrow_exception(CB->Exception);
 			}
+#else
+			if (CB && CB->bHasException)
+			{
+				ensureMsgf(false, TEXT("Exception escaped in AsyncFlow coroutine"));
+				UE_LOG(LogAsyncFlow, Error, TEXT("Exception escaped in AsyncFlow coroutine — exceptions disabled, returning default value"));
+				return T{};
+			}
+#endif
 			return CB ? MoveTemp(CB->Result.GetValue()) : T{};
 		}
 
@@ -1740,10 +1777,18 @@ namespace AsyncFlow
 
 		void await_resume()
 		{
+#if !PLATFORM_EXCEPTIONS_DISABLED
 			if (CB && CB->Exception)
 			{
 				std::rethrow_exception(CB->Exception);
 			}
+#else
+			if (CB && CB->bHasException)
+			{
+				ensureMsgf(false, TEXT("Exception escaped in AsyncFlow coroutine"));
+				UE_LOG(LogAsyncFlow, Error, TEXT("Exception escaped in AsyncFlow coroutine — exceptions disabled"));
+			}
+#endif
 		}
 
 	private:

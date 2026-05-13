@@ -32,7 +32,9 @@
 #include "Containers/Array.h"
 
 #include <coroutine>
+#if !PLATFORM_EXCEPTIONS_DISABLED
 #include <exception>
+#endif
 
 namespace AsyncFlow
 {
@@ -65,7 +67,11 @@ namespace AsyncFlow
 		T* CurrentValue = nullptr;
 
 		/** Captured if the coroutine body throws. Rethrown in MoveNext(). */
+#if !PLATFORM_EXCEPTIONS_DISABLED
 		std::exception_ptr Exception;
+#else
+		bool bHasException = false;
+#endif
 
 		TGenerator<T> get_return_object();
 
@@ -106,7 +112,13 @@ namespace AsyncFlow
 
 		void unhandled_exception()
 		{
+#if !PLATFORM_EXCEPTIONS_DISABLED
 			Exception = std::current_exception();
+#else
+			bHasException = true;
+			ensureMsgf(false, TEXT("Unhandled exception in TGenerator coroutine"));
+			UE_LOG(LogAsyncFlow, Error, TEXT("Unhandled exception in TGenerator coroutine — exceptions disabled, bHasException set"));
+#endif
 		}
 
 		/** co_await is not supported inside generators — compile-time error. */
@@ -196,10 +208,19 @@ namespace AsyncFlow
 				return false;
 			}
 			Handle.resume();
+#if !PLATFORM_EXCEPTIONS_DISABLED
 			if (Handle.promise().Exception)
 			{
 				std::rethrow_exception(Handle.promise().Exception);
 			}
+#else
+			if (Handle.promise().bHasException)
+			{
+				ensureMsgf(false, TEXT("Exception in TGenerator coroutine"));
+				UE_LOG(LogAsyncFlow, Error, TEXT("Exception in TGenerator coroutine — exceptions disabled, ending iteration"));
+				return false;
+			}
+#endif
 			return !Handle.done();
 		}
 
