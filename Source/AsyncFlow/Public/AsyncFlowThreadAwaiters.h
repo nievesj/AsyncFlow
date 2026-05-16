@@ -47,7 +47,9 @@
 
 #include <coroutine>
 #include <atomic>
+#if !PLATFORM_EXCEPTIONS_DISABLED
 #include <exception>
+#endif
 
 // UE::Tasks (UE 5.4+)
 #if __has_include("Tasks/Task.h")
@@ -81,7 +83,11 @@ namespace AsyncFlow
 		struct FBackgroundSharedState
 		{
 			TOptional<T> Result;
+#if !PLATFORM_EXCEPTIONS_DISABLED
 			std::exception_ptr Exception;
+#else
+			std::atomic<bool> bHasException{false};
+#endif
 			std::coroutine_handle<> Handle;
 			bool bAlive = true;
 		};
@@ -89,7 +95,11 @@ namespace AsyncFlow
 		template <>
 		struct FBackgroundSharedState<void>
 		{
+#if !PLATFORM_EXCEPTIONS_DISABLED
 			std::exception_ptr Exception;
+#else
+			std::atomic<bool> bHasException{false};
+#endif
 			std::coroutine_handle<> Handle;
 			bool bAlive = true;
 		};
@@ -185,6 +195,7 @@ namespace AsyncFlow
 			TFunction<T()> WorkCopy = MoveTemp(Work);
 
 			Async(EAsyncExecution::ThreadPool, [SharedState, WorkCopy = MoveTemp(WorkCopy)]() mutable {
+#if !PLATFORM_EXCEPTIONS_DISABLED
 				try
 				{
 					T Computed = WorkCopy();
@@ -206,15 +217,34 @@ namespace AsyncFlow
 						}
 					});
 				}
+#else
+				T Computed = WorkCopy();
+				AsyncTask(ENamedThreads::GameThread, [SharedState, Computed = MoveTemp(Computed)]() mutable {
+					if (SharedState->bAlive)
+					{
+						SharedState->Result.Emplace(MoveTemp(Computed));
+						SharedState->Handle.resume();
+					}
+				});
+#endif
 			});
 		}
 
 		T await_resume()
 		{
-			if (State->Exception)
+#if !PLATFORM_EXCEPTIONS_DISABLED
+			if (State && State->Exception)
 			{
 				std::rethrow_exception(State->Exception);
 			}
+#else
+			if (State && State->bHasException.load())
+			{
+				ensureMsgf(false, TEXT("Exception escaped in FBackgroundTaskAwaiter"));
+				UE_LOG(LogAsyncFlow, Error, TEXT("Exception escaped in FBackgroundTaskAwaiter — exceptions disabled, returning default value"));
+				return T{};
+			}
+#endif
 			return MoveTemp(State->Result.GetValue());
 		}
 	};
@@ -257,6 +287,7 @@ namespace AsyncFlow
 			TFunction<void()> WorkCopy = MoveTemp(Work);
 
 			Async(EAsyncExecution::ThreadPool, [SharedState, WorkCopy = MoveTemp(WorkCopy)]() mutable {
+#if !PLATFORM_EXCEPTIONS_DISABLED
 				try
 				{
 					WorkCopy();
@@ -277,15 +308,32 @@ namespace AsyncFlow
 						}
 					});
 				}
+#else
+				WorkCopy();
+				AsyncTask(ENamedThreads::GameThread, [SharedState]() {
+					if (SharedState->bAlive)
+					{
+						SharedState->Handle.resume();
+					}
+				});
+#endif
 			});
 		}
 
 		void await_resume()
 		{
-			if (State->Exception)
+#if !PLATFORM_EXCEPTIONS_DISABLED
+			if (State && State->Exception)
 			{
 				std::rethrow_exception(State->Exception);
 			}
+#else
+			if (State && State->bHasException.load())
+			{
+				ensureMsgf(false, TEXT("Exception escaped in FBackgroundTaskAwaiter"));
+				UE_LOG(LogAsyncFlow, Error, TEXT("Exception escaped in FBackgroundTaskAwaiter — exceptions disabled"));
+			}
+#endif
 		}
 	};
 
