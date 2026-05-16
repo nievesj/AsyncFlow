@@ -669,19 +669,26 @@ namespace AsyncFlow
 					}
 				}
 
-				// Prefer the alive-flag-aware overload when the inner awaitable supports it.
-				// This prevents Signal()/Release() from touching a destroyed coroutine frame.
-				// Propagate the bool return: false = immediate resume (resource acquired inline),
-				// true = coroutine stays suspended until inner schedules a resume.
-				if constexpr (requires { Inner.await_suspend_alive(Handle, TWeakPtr<bool>{}); })
-				{
-					return Inner.await_suspend_alive(Handle, TWeakPtr<bool>(Alive));
-				}
-				else
-				{
-					Inner.await_suspend(Handle);
-					return true; // void inner always suspends; it is responsible for scheduling resume
-				}
+			// Prefer the alive-flag-aware overload when the inner awaitable supports it.
+			// This prevents Signal()/Release() from touching a destroyed coroutine frame.
+			// Propagate the bool return: false = immediate resume (resource acquired inline),
+			// true = coroutine stays suspended until inner schedules a resume.
+
+			// Explicitly convert HandleType to std::coroutine_handle<>.
+			// MSVC deduces HandleType as std::coroutine_handle<TTaskPromise<T>> (typed handle)
+			// but inner awaiters accept std::coroutine_handle<> (void handle). The implicit
+			// conversion exists but MSVC can't find it inside a template else-branch.
+			std::coroutine_handle<> VoidHandle = Handle;
+
+			if constexpr (requires { Inner.await_suspend_alive(VoidHandle, TWeakPtr<bool>{}); })
+			{
+				return Inner.await_suspend_alive(VoidHandle, TWeakPtr<bool>(Alive));
+			}
+			else
+			{
+				Inner.await_suspend(VoidHandle);
+				return true; // void inner always suspends; it is responsible for scheduling resume
+			}
 			}
 
 			auto await_resume()
